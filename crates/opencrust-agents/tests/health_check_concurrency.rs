@@ -1,5 +1,5 @@
 use async_trait::async_trait;
-use opencrust_agents::{AgentRuntime, LlmProvider, LlmRequest, LlmResponse};
+use opencrust_agents::{AgentRuntime, LlmProvider, LlmRequest, LlmResponse, LlmStream};
 use opencrust_common::Result;
 use std::time::{Duration, Instant};
 
@@ -15,6 +15,10 @@ impl LlmProvider for MockProvider {
     }
 
     async fn complete(&self, _request: &LlmRequest) -> Result<LlmResponse> {
+        unimplemented!()
+    }
+
+    async fn complete_stream(&self, _request: &LlmRequest) -> Result<LlmStream> {
         unimplemented!()
     }
 

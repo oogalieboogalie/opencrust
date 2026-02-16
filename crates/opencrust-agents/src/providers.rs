@@ -1,6 +1,8 @@
 use async_trait::async_trait;
+use futures::Stream;
 use opencrust_common::Result;
 use serde::{Deserialize, Serialize};
+use std::pin::Pin;
 
 /// Trait for LLM provider integrations (Anthropic, OpenAI, Ollama, etc.).
 #[async_trait]
@@ -11,9 +13,14 @@ pub trait LlmProvider: Send + Sync {
     /// Send a completion request and return the response.
     async fn complete(&self, request: &LlmRequest) -> Result<LlmResponse>;
 
+    /// Send a streaming completion request and return a stream of response chunks.
+    async fn complete_stream(&self, request: &LlmRequest) -> Result<LlmStream>;
+
     /// Check if the provider is available and configured.
     async fn health_check(&self) -> Result<bool>;
 }
+
+pub type LlmStream = Pin<Box<dyn Stream<Item = Result<LlmStreamResponse>> + Send>>;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct LlmRequest {
@@ -73,6 +80,27 @@ pub struct LlmResponse {
     pub model: String,
     pub usage: Option<Usage>,
     pub stop_reason: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct LlmStreamResponse {
+    pub delta: StreamContent,
+    pub usage: Option<Usage>,
+    pub stop_reason: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub enum StreamContent {
+    Text(String),
+    ToolUse(ToolUseDelta),
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ToolUseDelta {
+    pub index: u32,
+    pub id: Option<String>,
+    pub name: Option<String>,
+    pub input: String, // Partial JSON
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
