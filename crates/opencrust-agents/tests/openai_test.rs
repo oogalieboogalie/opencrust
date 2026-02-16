@@ -229,3 +229,17 @@ async fn test_openai_stream() {
     assert_eq!(full_text, "Hello World");
     assert!(usage_found, "Usage should be reported");
 }
+
+#[tokio::test]
+async fn test_openai_health_check() {
+    let mock_server = MockServer::start().await;
+
+    Mock::given(method("GET"))
+        .and(path("/models"))
+        .respond_with(ResponseTemplate::new(200))
+        .mount(&mock_server)
+        .await;
+
+    let provider = OpenAiProvider::new("test-key".to_string(), Some(mock_server.uri()));
+    assert!(provider.health_check().await.unwrap());
+}

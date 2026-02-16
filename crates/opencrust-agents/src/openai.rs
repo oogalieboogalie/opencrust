@@ -80,7 +80,17 @@ impl LlmProvider for OpenAiProvider {
     }
 
     async fn health_check(&self) -> Result<bool> {
-        Ok(true)
+        let url = format!("{}/models", self.base_url);
+        let response = self.client
+            .get(&url)
+            .header("Authorization", format!("Bearer {}", self.api_key))
+            .send()
+            .await;
+
+        match response {
+            Ok(resp) => Ok(resp.status().is_success()),
+            Err(_) => Ok(false),
+        }
     }
 }
 
@@ -397,11 +407,22 @@ impl Stream for SseParser {
                 std::task::Poll::Ready(Some(Ok(chunk))) => {
                     self.buffer.extend_from_slice(&chunk);
 
-                    while let Some(pos) = self.buffer.windows(2).position(|w| w == b"\n\n") {
-                        let msg_bytes = self.buffer.drain(..pos).collect::<Vec<u8>>();
-                        self.buffer.drain(..2); // remove \n\n
+                    loop {
+                        let mut pos = None;
+                        let mut len = 0;
+                        if let Some(p) = self.buffer.windows(2).position(|w| w == b"\n\n") {
+                            pos = Some(p);
+                            len = 2;
+                        } else if let Some(p) = self.buffer.windows(4).position(|w| w == b"\r\n\r\n") {
+                            pos = Some(p);
+                            len = 4;
+                        }
 
-                        if let Ok(msg_str) = String::from_utf8(msg_bytes) {
+                        if let Some(p) = pos {
+                            let msg_bytes = self.buffer.drain(..p).collect::<Vec<u8>>();
+                            self.buffer.drain(..len); // remove delimiter
+
+                            if let Ok(msg_str) = String::from_utf8(msg_bytes) {
                             for line in msg_str.lines() {
                                 if let Some(data) = line.strip_prefix("data: ") {
                                     if data.trim() == "[DONE]" {
@@ -460,14 +481,19 @@ impl Stream for SseParser {
                                             }
                                         },
                                         Err(e) => {
-                                            // self.queue.push_back(Err(Error::Agent(format!("JSON parse error: {}", e))));
+                                            self.queue.push_back(Err(Error::Agent(format!("JSON parse error: {}", e))));
                                         }
                                     }
                                 }
                             }
+                        } else {
+                            // Invalid UTF-8, drop
                         }
+                    } else {
+                        break;
                     }
                 }
+            }
                 std::task::Poll::Ready(Some(Err(e))) => {
                     return std::task::Poll::Ready(Some(Err(Error::Agent(format!("Stream error: {}", e)))));
                 }
