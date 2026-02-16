@@ -1,4 +1,5 @@
 use async_trait::async_trait;
+use futures::stream::BoxStream;
 use opencrust_agents::{AgentRuntime, LlmProvider, LlmRequest, LlmResponse};
 use opencrust_common::Result;
 use std::time::{Duration, Instant};
@@ -15,6 +16,17 @@ impl LlmProvider for MockProvider {
     }
 
     async fn complete(&self, _request: &LlmRequest) -> Result<LlmResponse> {
+        unimplemented!()
+    }
+
+    async fn stream_complete(
+        &self,
+        _request: &LlmRequest,
+    ) -> Result<BoxStream<'static, Result<LlmResponse>>> {
+        unimplemented!()
+    }
+
+    async fn list_models(&self) -> Result<Vec<String>> {
         unimplemented!()
     }
 
