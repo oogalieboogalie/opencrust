@@ -1,3 +1,5 @@
+#![allow(clippy::collapsible_if)]
+
 use super::{
     ChatRole, ContentBlock, LlmProvider, LlmRequest, LlmResponse, MessagePart, Usage,
 };
@@ -39,7 +41,7 @@ impl AnthropicProvider {
                 ChatRole::System => {
                     // Append to system prompt if found in messages (though LlmRequest has explicit system field)
                     if !system_prompt.is_empty() {
-                        system_prompt.push_str("\n");
+                        system_prompt.push('\n');
                     }
                     match &msg.content {
                         MessagePart::Text(t) => system_prompt.push_str(t),
@@ -232,14 +234,10 @@ impl LlmProvider for AnthropicProvider {
         let model = resp_json["model"].as_str().unwrap_or_default().to_string();
         let stop_reason = resp_json["stop_reason"].as_str().map(|s| s.to_string());
 
-        let usage = if let Some(u) = resp_json.get("usage") {
-            Some(Usage {
-                input_tokens: u["input_tokens"].as_u64().unwrap_or(0) as u32,
-                output_tokens: u["output_tokens"].as_u64().unwrap_or(0) as u32,
-            })
-        } else {
-            None
-        };
+        let usage = resp_json.get("usage").map(|u| Usage {
+            input_tokens: u["input_tokens"].as_u64().unwrap_or(0) as u32,
+            output_tokens: u["output_tokens"].as_u64().unwrap_or(0) as u32,
+        });
 
         Ok(LlmResponse {
             content,
@@ -284,8 +282,7 @@ impl LlmProvider for AnthropicProvider {
                             continue;
                         }
 
-                        if line.starts_with("data: ") {
-                            let data = &line[6..];
+                        if let Some(data) = line.strip_prefix("data: ") {
                             if let Ok(json) = serde_json::from_str::<Value>(data) {
                                 let event_type = json["type"].as_str().unwrap_or_default();
                                 match event_type {
