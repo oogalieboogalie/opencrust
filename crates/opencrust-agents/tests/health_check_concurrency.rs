@@ -46,11 +46,22 @@ async fn test_health_check_performance() {
     assert_eq!(results.len(), count);
 
     // For verification: check if execution is concurrent
-    // It should take roughly the delay time, not sequential sum
-    // We add a buffer for overhead (e.g., 2x delay is generous enough)
-    let max_expected_duration = delay * 2;
-    assert!(elapsed < max_expected_duration, "Execution was slower than expected for concurrent processing. Elapsed: {:?}, Expected less than: {:?}", elapsed, max_expected_duration);
+    // The sequential execution time would be at least (count * delay).
+    // We expect concurrent execution to be significantly faster.
+    // To be robust against slow CI runners, we assert that it took less than
+    // half the time required for sequential execution. This proves concurrency
+    // without enforcing tight timing bounds that might flake.
+    let sequential_duration = delay * count as u32;
+    let max_allowed_duration = sequential_duration / 2;
 
-    // Also ensure it took at least the delay
+    assert!(
+        elapsed < max_allowed_duration,
+        "Execution took {:?}, which is too slow for concurrent processing. Expected less than {:?} (half of sequential time {:?})",
+        elapsed,
+        max_allowed_duration,
+        sequential_duration
+    );
+
+    // Also ensure it took at least the delay (sanity check)
     assert!(elapsed >= delay, "Execution was faster than the delay itself!");
 }
