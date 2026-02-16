@@ -5,7 +5,7 @@
 <h1 align="center">OpenCrust</h1>
 
 <p align="center">
-  <strong>A personal AI assistant platform, rewritten in Rust.</strong>
+  <strong>A personal AI assistant platform, written in Rust.</strong>
 </p>
 
 <p align="center">
