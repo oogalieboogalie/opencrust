@@ -1,7 +1,7 @@
 use async_trait::async_trait;
+use futures::stream::BoxStream;
 use opencrust_common::Result;
 use serde::{Deserialize, Serialize};
-use futures::stream::BoxStream;
 
 pub mod anthropic;
 pub use anthropic::AnthropicProvider;
@@ -16,7 +16,10 @@ pub trait LlmProvider: Send + Sync {
     async fn complete(&self, request: &LlmRequest) -> Result<LlmResponse>;
 
     /// Send a completion request and return a stream of responses.
-    async fn stream_complete(&self, request: &LlmRequest) -> Result<BoxStream<'static, Result<LlmResponse>>>;
+    async fn stream_complete(
+        &self,
+        request: &LlmRequest,
+    ) -> Result<BoxStream<'static, Result<LlmResponse>>>;
 
     /// List available models.
     async fn list_models(&self) -> Result<Vec<String>>;

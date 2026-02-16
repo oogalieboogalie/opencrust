@@ -1,13 +1,11 @@
 #![allow(clippy::collapsible_if)]
 
-use super::{
-    ChatRole, ContentBlock, LlmProvider, LlmRequest, LlmResponse, MessagePart, Usage,
-};
+use super::{ChatRole, ContentBlock, LlmProvider, LlmRequest, LlmResponse, MessagePart, Usage};
 use async_trait::async_trait;
 use futures::stream::{self, BoxStream, StreamExt};
 use opencrust_common::{Error, Result};
 use reqwest::Client;
-use serde_json::{json, Value};
+use serde_json::{Value, json};
 
 const ANTHROPIC_API_URL: &str = "https://api.anthropic.com/v1/messages";
 const ANTHROPIC_VERSION: &str = "2023-06-01";
@@ -80,13 +78,17 @@ impl AnthropicProvider {
         }
 
         if !request.tools.is_empty() {
-            let tools: Vec<Value> = request.tools.iter().map(|t| {
-                json!({
-                    "name": t.name,
-                    "description": t.description,
-                    "input_schema": t.input_schema
+            let tools: Vec<Value> = request
+                .tools
+                .iter()
+                .map(|t| {
+                    json!({
+                        "name": t.name,
+                        "description": t.description,
+                        "input_schema": t.input_schema
+                    })
                 })
-            }).collect();
+                .collect();
             body["tools"] = json!(tools);
         }
 
@@ -103,7 +105,10 @@ impl AnthropicProvider {
         let content = match &msg.content {
             MessagePart::Text(text) => json!(text),
             MessagePart::Parts(parts) => {
-                let blocks: Result<Vec<Value>> = parts.iter().map(|p| self.convert_content_block(p)).collect();
+                let blocks: Result<Vec<Value>> = parts
+                    .iter()
+                    .map(|p| self.convert_content_block(p))
+                    .collect();
                 json!(blocks?)
             }
         };
@@ -120,7 +125,11 @@ impl AnthropicProvider {
             MessagePart::Parts(parts) => {
                 let mut converted = Vec::new();
                 for p in parts {
-                    if let ContentBlock::ToolResult { tool_use_id, content } = p {
+                    if let ContentBlock::ToolResult {
+                        tool_use_id,
+                        content,
+                    } = p
+                    {
                         converted.push(json!({
                             "type": "tool_result",
                             "tool_use_id": tool_use_id,
@@ -168,7 +177,10 @@ impl AnthropicProvider {
                 } else {
                     // For now, fail or maybe treat as unsupported.
                     // Anthropic doesn't support remote URLs directly.
-                    Err(Error::Config(format!("Unsupported image URL format (must be base64 data URL): {}", url)))
+                    Err(Error::Config(format!(
+                        "Unsupported image URL format (must be base64 data URL): {}",
+                        url
+                    )))
                 }
             }
             ContentBlock::ToolUse { id, name, input } => Ok(json!({
@@ -177,9 +189,9 @@ impl AnthropicProvider {
                 "name": name,
                 "input": input
             })),
-            ContentBlock::ToolResult { .. } => {
-                 Err(Error::Config("ToolResult cannot be used in Assistant/User message blocks directly".to_string()))
-            }
+            ContentBlock::ToolResult { .. } => Err(Error::Config(
+                "ToolResult cannot be used in Assistant/User message blocks directly".to_string(),
+            )),
         }
     }
 }
@@ -193,7 +205,9 @@ impl LlmProvider for AnthropicProvider {
     async fn complete(&self, request: &LlmRequest) -> Result<LlmResponse> {
         let body = self.prepare_request_body(request, false)?;
 
-        let res = self.client.post(&self.base_url)
+        let res = self
+            .client
+            .post(&self.base_url)
             .header("x-api-key", &self.api_key)
             .header("anthropic-version", ANTHROPIC_VERSION)
             .header("content-type", "application/json")
@@ -204,20 +218,28 @@ impl LlmProvider for AnthropicProvider {
 
         if !res.status().is_success() {
             let error_text = res.text().await.unwrap_or_default();
-            return Err(Error::Gateway(format!("Anthropic API error: {}", error_text)));
+            return Err(Error::Gateway(format!(
+                "Anthropic API error: {}",
+                error_text
+            )));
         }
 
-        let resp_json: Value = res.json().await.map_err(|e| Error::Gateway(e.to_string()))?;
+        let resp_json: Value = res
+            .json()
+            .await
+            .map_err(|e| Error::Gateway(e.to_string()))?;
 
         // Parse response
-        let content_json = resp_json["content"].as_array().ok_or(Error::Gateway("Missing content".to_string()))?;
+        let content_json = resp_json["content"]
+            .as_array()
+            .ok_or(Error::Gateway("Missing content".to_string()))?;
         let mut content = Vec::new();
         for item in content_json {
             let type_str = item["type"].as_str().unwrap_or_default();
             match type_str {
                 "text" => {
                     content.push(ContentBlock::Text {
-                        text: item["text"].as_str().unwrap_or_default().to_string()
+                        text: item["text"].as_str().unwrap_or_default().to_string(),
                     });
                 }
                 "tool_use" => {
@@ -247,10 +269,15 @@ impl LlmProvider for AnthropicProvider {
         })
     }
 
-    async fn stream_complete(&self, request: &LlmRequest) -> Result<BoxStream<'static, Result<LlmResponse>>> {
+    async fn stream_complete(
+        &self,
+        request: &LlmRequest,
+    ) -> Result<BoxStream<'static, Result<LlmResponse>>> {
         let body = self.prepare_request_body(request, true)?;
 
-        let res = self.client.post(&self.base_url)
+        let res = self
+            .client
+            .post(&self.base_url)
             .header("x-api-key", &self.api_key)
             .header("anthropic-version", ANTHROPIC_VERSION)
             .header("content-type", "application/json")
@@ -261,7 +288,10 @@ impl LlmProvider for AnthropicProvider {
 
         if !res.status().is_success() {
             let error_text = res.text().await.unwrap_or_default();
-            return Err(Error::Gateway(format!("Anthropic API error: {}", error_text)));
+            return Err(Error::Gateway(format!(
+                "Anthropic API error: {}",
+                error_text
+            )));
         }
 
         let stream = res.bytes_stream();
@@ -275,7 +305,9 @@ impl LlmProvider for AnthropicProvider {
                         let line_bytes: Vec<u8> = buffer.drain(..=i).collect();
                         let line = String::from_utf8_lossy(&line_bytes).trim().to_string();
 
-                        if line.is_empty() { continue; }
+                        if line.is_empty() {
+                            continue;
+                        }
 
                         if line.starts_with("event: ") {
                             // verify event type if needed
@@ -289,8 +321,14 @@ impl LlmProvider for AnthropicProvider {
                                     "content_block_start" => {
                                         if let Some(content_block) = json.get("content_block") {
                                             if content_block["type"] == "tool_use" {
-                                                let id = content_block["id"].as_str().unwrap_or_default().to_string();
-                                                let name = content_block["name"].as_str().unwrap_or_default().to_string();
+                                                let id = content_block["id"]
+                                                    .as_str()
+                                                    .unwrap_or_default()
+                                                    .to_string();
+                                                let name = content_block["name"]
+                                                    .as_str()
+                                                    .unwrap_or_default()
+                                                    .to_string();
                                                 current_tool = Some((id, name, String::new()));
                                             }
                                         }
@@ -298,60 +336,95 @@ impl LlmProvider for AnthropicProvider {
                                     "content_block_delta" => {
                                         if let Some(delta) = json.get("delta") {
                                             if delta["type"] == "text_delta" {
-                                                let text = delta["text"].as_str().unwrap_or_default().to_string();
-                                                return Some((Ok(LlmResponse {
-                                                    content: vec![ContentBlock::Text { text }],
-                                                    model: String::new(),
-                                                    usage: None,
-                                                    stop_reason: None,
-                                                }), (stream, buffer, current_tool)));
+                                                let text = delta["text"]
+                                                    .as_str()
+                                                    .unwrap_or_default()
+                                                    .to_string();
+                                                return Some((
+                                                    Ok(LlmResponse {
+                                                        content: vec![ContentBlock::Text { text }],
+                                                        model: String::new(),
+                                                        usage: None,
+                                                        stop_reason: None,
+                                                    }),
+                                                    (stream, buffer, current_tool),
+                                                ));
                                             } else if delta["type"] == "input_json_delta" {
-                                                if let Some((_, _, ref mut input_acc)) = current_tool {
-                                                    input_acc.push_str(delta["partial_json"].as_str().unwrap_or_default());
+                                                if let Some((_, _, ref mut input_acc)) =
+                                                    current_tool
+                                                {
+                                                    input_acc.push_str(
+                                                        delta["partial_json"]
+                                                            .as_str()
+                                                            .unwrap_or_default(),
+                                                    );
                                                 }
                                             }
                                         }
                                     }
                                     "content_block_stop" => {
                                         if let Some((id, name, input_json)) = current_tool.take() {
-                                            if let Ok(input_val) = serde_json::from_str::<Value>(&input_json) {
-                                                return Some((Ok(LlmResponse {
-                                                    content: vec![ContentBlock::ToolUse {
-                                                        id,
-                                                        name,
-                                                        input: input_val,
-                                                    }],
-                                                    model: String::new(),
-                                                    usage: None,
-                                                    stop_reason: None,
-                                                }), (stream, buffer, None)));
+                                            if let Ok(input_val) =
+                                                serde_json::from_str::<Value>(&input_json)
+                                            {
+                                                return Some((
+                                                    Ok(LlmResponse {
+                                                        content: vec![ContentBlock::ToolUse {
+                                                            id,
+                                                            name,
+                                                            input: input_val,
+                                                        }],
+                                                        model: String::new(),
+                                                        usage: None,
+                                                        stop_reason: None,
+                                                    }),
+                                                    (stream, buffer, None),
+                                                ));
                                             }
                                         }
                                     }
                                     "message_delta" => {
                                         // Update usage/stop reason
                                         if let Some(usage) = json.get("usage") {
-                                            let output_tokens = usage["output_tokens"].as_u64().unwrap_or(0) as u32;
-                                             return Some((Ok(LlmResponse {
-                                                content: vec![],
-                                                model: String::new(),
-                                                usage: Some(Usage { input_tokens: 0, output_tokens }),
-                                                stop_reason: json.get("stop_reason").and_then(|s| s.as_str()).map(|s| s.to_string()),
-                                            }), (stream, buffer, current_tool)));
+                                            let output_tokens =
+                                                usage["output_tokens"].as_u64().unwrap_or(0) as u32;
+                                            return Some((
+                                                Ok(LlmResponse {
+                                                    content: vec![],
+                                                    model: String::new(),
+                                                    usage: Some(Usage {
+                                                        input_tokens: 0,
+                                                        output_tokens,
+                                                    }),
+                                                    stop_reason: json
+                                                        .get("stop_reason")
+                                                        .and_then(|s| s.as_str())
+                                                        .map(|s| s.to_string()),
+                                                }),
+                                                (stream, buffer, current_tool),
+                                            ));
                                         }
                                     }
                                     "message_start" => {
-                                         if let Some(message) = json.get("message") {
+                                        if let Some(message) = json.get("message") {
                                             if let Some(usage) = message.get("usage") {
-                                                let input_tokens = usage["input_tokens"].as_u64().unwrap_or(0) as u32;
-                                                 return Some((Ok(LlmResponse {
-                                                    content: vec![],
-                                                    model: String::new(),
-                                                    usage: Some(Usage { input_tokens, output_tokens: 0 }),
-                                                    stop_reason: None,
-                                                }), (stream, buffer, current_tool)));
+                                                let input_tokens =
+                                                    usage["input_tokens"].as_u64().unwrap_or(0)
+                                                        as u32;
+                                                return Some((
+                                                    Ok(LlmResponse {
+                                                        content: vec![],
+                                                        model: String::new(),
+                                                        usage: Some(Usage {
+                                                            input_tokens,
+                                                            output_tokens: 0,
+                                                        }),
+                                                        stop_reason: None,
+                                                    }),
+                                                    (stream, buffer, current_tool),
+                                                ));
                                             }
-                                         }
+                                        }
                                     }
                                     _ => {}
                                 }
@@ -365,11 +438,16 @@ impl LlmProvider for AnthropicProvider {
                         Some(Ok(bytes)) => {
                             buffer.extend_from_slice(&bytes);
                         }
-                        Some(Err(e)) => return Some((Err(Error::Gateway(e.to_string())), (stream, buffer, current_tool))),
+                        Some(Err(e)) => {
+                            return Some((
+                                Err(Error::Gateway(e.to_string())),
+                                (stream, buffer, current_tool),
+                            ));
+                        }
                         None => return None, // End of stream
                     }
                 }
-            }
+            },
         );
 
         Ok(Box::pin(response_stream))
@@ -392,7 +470,9 @@ impl LlmProvider for AnthropicProvider {
             "messages": [{"role": "user", "content": "ping"}]
         });
 
-        let res = self.client.post(&self.base_url)
+        let res = self
+            .client
+            .post(&self.base_url)
             .header("x-api-key", &self.api_key)
             .header("anthropic-version", ANTHROPIC_VERSION)
             .header("content-type", "application/json")
