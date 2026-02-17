@@ -124,10 +124,14 @@ impl Channel for TelegramChannel {
                                 }
                             });
 
-                            // Consume streaming deltas and edit message
+                            // Consume streaming deltas and edit message.
+                            // Buffer for 1s before sending the first message so short
+                            // responses appear as a single formatted message instead of
+                            // flashing the first word then replacing it.
                             let mut accumulated = String::new();
                             let mut msg_id: Option<teloxide::types::MessageId> = None;
                             let mut last_edit = tokio::time::Instant::now();
+                            let mut first_delta_at: Option<tokio::time::Instant> = None;
 
                             loop {
                                 tokio::select! {
@@ -135,17 +139,22 @@ impl Channel for TelegramChannel {
                                         match delta {
                                             Some(text) => {
                                                 accumulated.push_str(&text);
+                                                if first_delta_at.is_none() {
+                                                    first_delta_at = Some(tokio::time::Instant::now());
+                                                }
 
                                                 if msg_id.is_none() {
-                                                    // Send initial message
-                                                    match bot.send_message(chat_id, &accumulated).await {
-                                                        Ok(sent) => {
-                                                            msg_id = Some(sent.id);
-                                                            last_edit = tokio::time::Instant::now();
-                                                        }
-                                                        Err(e) => {
-                                                            error!("failed to send streaming message: {e}");
-                                                            break;
+                                                    // Only send after 1s buffer period
+                                                    if first_delta_at.unwrap().elapsed() >= Duration::from_secs(1) {
+                                                        match bot.send_message(chat_id, &accumulated).await {
+                                                            Ok(sent) => {
+                                                                msg_id = Some(sent.id);
+                                                                last_edit = tokio::time::Instant::now();
+                                                            }
+                                                            Err(e) => {
+                                                                error!("failed to send streaming message: {e}");
+                                                                break;
+                                                            }
                                                         }
                                                     }
                                                 } else if last_edit.elapsed() >= Duration::from_millis(1000)
