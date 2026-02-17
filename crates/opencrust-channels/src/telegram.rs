@@ -1,21 +1,24 @@
 use std::future::Future;
 use std::pin::Pin;
 use std::sync::Arc;
+use std::time::Duration;
 
 use async_trait::async_trait;
 use teloxide::dispatching::UpdateFilterExt;
 use teloxide::prelude::*;
-use teloxide::types::ChatAction;
-use tokio::sync::watch;
+use teloxide::types::{ChatAction, ParseMode};
+use tokio::sync::{mpsc, watch};
 use tracing::{error, info, warn};
 
+use crate::telegram_fmt::to_telegram_markdown;
 use crate::traits::{Channel, ChannelStatus};
 use opencrust_common::{Message, MessageContent, Result};
 
 /// Callback invoked when the bot receives a text message.
 ///
-/// Arguments: `(chat_id, user_id_string, user_display_name, text)`.
-/// Returns the assistant's reply text on success, or an error string.
+/// Arguments: `(chat_id, user_id_string, user_display_name, text, delta_sender)`.
+/// When `delta_sender` is `Some`, the callback should send text deltas through it
+/// for streaming display. The callback still returns the final complete text.
 /// Return `Err("__blocked__")` to silently drop the message (unauthorized user).
 pub type OnMessageFn = Arc<
     dyn Fn(
@@ -23,6 +26,7 @@ pub type OnMessageFn = Arc<
             String,
             String,
             String,
+            Option<mpsc::Sender<String>>,
         ) -> Pin<Box<dyn Future<Output = std::result::Result<String, String>> + Send>>
         + Send
         + Sync,
@@ -99,23 +103,128 @@ impl Channel for TelegramChannel {
                             // Send typing indicator
                             let _ = bot.send_chat_action(chat_id, ChatAction::Typing).await;
 
-                            match on_message(chat_id.0, user_id, user_name, text).await {
-                                Ok(reply) => {
-                                    if let Err(e) = bot.send_message(chat_id, reply).await {
-                                        error!("failed to send telegram reply: {e}");
+                            // Create streaming channel
+                            let (delta_tx, mut delta_rx) = mpsc::channel::<String>(64);
+
+                            // Spawn callback
+                            let callback_handle = tokio::spawn({
+                                let on_message = Arc::clone(&on_message);
+                                let user_id = user_id.clone();
+                                let user_name = user_name.clone();
+                                let text = text.clone();
+                                async move {
+                                    on_message(
+                                        chat_id.0,
+                                        user_id,
+                                        user_name,
+                                        text,
+                                        Some(delta_tx),
+                                    )
+                                    .await
+                                }
+                            });
+
+                            // Consume streaming deltas and edit message
+                            let mut accumulated = String::new();
+                            let mut msg_id: Option<teloxide::types::MessageId> = None;
+                            let mut last_edit = tokio::time::Instant::now();
+
+                            loop {
+                                tokio::select! {
+                                    delta = delta_rx.recv() => {
+                                        match delta {
+                                            Some(text) => {
+                                                accumulated.push_str(&text);
+
+                                                if msg_id.is_none() {
+                                                    // Send initial message
+                                                    match bot.send_message(chat_id, &accumulated).await {
+                                                        Ok(sent) => {
+                                                            msg_id = Some(sent.id);
+                                                            last_edit = tokio::time::Instant::now();
+                                                        }
+                                                        Err(e) => {
+                                                            error!("failed to send streaming message: {e}");
+                                                            break;
+                                                        }
+                                                    }
+                                                } else if last_edit.elapsed() >= Duration::from_millis(1000)
+                                                    && let Some(id) = msg_id
+                                                {
+                                                    let _ = bot
+                                                        .edit_message_text(chat_id, id, &accumulated)
+                                                        .await;
+                                                    last_edit = tokio::time::Instant::now();
+                                                }
+                                            }
+                                            None => break, // Sender dropped — callback finished
+                                        }
+                                    }
+                                    _ = tokio::time::sleep(Duration::from_secs(4)) => {
+                                        // Keep typing indicator alive during pauses (e.g. tool execution)
+                                        let _ = bot.send_chat_action(chat_id, ChatAction::Typing).await;
+                                    }
+                                }
+                            }
+
+                            // Get callback result
+                            let result = callback_handle
+                                .await
+                                .unwrap_or_else(|e| Err(format!("task panic: {e}")));
+
+                            match result {
+                                Ok(final_text) => {
+                                    if let Some(id) = msg_id {
+                                        // Final edit with MarkdownV2 formatting
+                                        let formatted = to_telegram_markdown(&final_text);
+                                        let edit_result = bot
+                                            .edit_message_text(chat_id, id, &formatted)
+                                            .parse_mode(ParseMode::MarkdownV2)
+                                            .await;
+                                        if edit_result.is_err() {
+                                            // Fallback: plain text
+                                            let _ = bot
+                                                .edit_message_text(chat_id, id, &final_text)
+                                                .await;
+                                        }
+                                    } else {
+                                        // No streaming happened (command response) — send directly
+                                        let formatted = to_telegram_markdown(&final_text);
+                                        let send_result = bot
+                                            .send_message(chat_id, &formatted)
+                                            .parse_mode(ParseMode::MarkdownV2)
+                                            .await;
+                                        if send_result.is_err() {
+                                            // Fallback: plain text
+                                            let _ =
+                                                bot.send_message(chat_id, &final_text).await;
+                                        }
                                     }
                                 }
                                 Err(e) if e == "__blocked__" => {
                                     // Silently drop — unauthorized user
                                 }
                                 Err(e) => {
-                                    warn!("agent error for telegram chat {}: {e}", chat_id);
-                                    let _ = bot
-                                        .send_message(
-                                            chat_id,
-                                            format!("Sorry, an error occurred: {e}"),
-                                        )
-                                        .await;
+                                    if let Some(id) = msg_id {
+                                        let _ = bot
+                                            .edit_message_text(
+                                                chat_id,
+                                                id,
+                                                format!("Sorry, an error occurred: {e}"),
+                                            )
+                                            .await;
+                                    } else {
+                                        warn!(
+                                            "agent error for telegram chat {}: {e}",
+                                            chat_id
+                                        );
+                                        let _ = bot
+                                            .send_message(
+                                                chat_id,
+                                                format!("Sorry, an error occurred: {e}"),
+                                            )
+                                            .await;
+                                    }
                                 }
                             }
 
@@ -186,9 +295,17 @@ impl Channel for TelegramChannel {
             }
         };
 
-        bot.send_message(ChatId(chat_id), text)
-            .await
-            .map_err(|e| opencrust_common::Error::Channel(format!("telegram send failed: {e}")))?;
+        let formatted = to_telegram_markdown(&text);
+        let send_result = bot
+            .send_message(ChatId(chat_id), &formatted)
+            .parse_mode(ParseMode::MarkdownV2)
+            .await;
+        if send_result.is_err() {
+            // Fallback: plain text
+            bot.send_message(ChatId(chat_id), text).await.map_err(|e| {
+                opencrust_common::Error::Channel(format!("telegram send failed: {e}"))
+            })?;
+        }
 
         Ok(())
     }
@@ -204,8 +321,9 @@ mod tests {
 
     #[test]
     fn channel_type_is_telegram() {
-        let on_msg: OnMessageFn =
-            Arc::new(|_chat_id, _uid, _user, _text| Box::pin(async { Ok("test".to_string()) }));
+        let on_msg: OnMessageFn = Arc::new(|_chat_id, _uid, _user, _text, _delta_tx| {
+            Box::pin(async { Ok("test".to_string()) })
+        });
         let channel = TelegramChannel::new("fake-token".to_string(), on_msg);
         assert_eq!(channel.channel_type(), "telegram");
         assert_eq!(channel.display_name(), "Telegram");

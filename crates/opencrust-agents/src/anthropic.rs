@@ -1,10 +1,14 @@
+use std::pin::Pin;
+
 use async_trait::async_trait;
+use futures::{Stream, StreamExt};
 use opencrust_common::{Error, Result};
 use serde::{Deserialize, Serialize};
 use tracing::{debug, info, instrument};
 
 use crate::providers::{
-    ChatMessage, ChatRole, ContentBlock, LlmProvider, LlmRequest, LlmResponse, MessagePart, Usage,
+    ChatMessage, ChatRole, ContentBlock, LlmProvider, LlmRequest, LlmResponse, MessagePart,
+    StreamEvent, Usage,
 };
 
 const DEFAULT_MODEL: &str = "claude-sonnet-4-5-20250929";
@@ -112,6 +116,93 @@ impl LlmProvider for AnthropicProvider {
         Ok(from_anthropic_response(api_response))
     }
 
+    #[instrument(skip(self, request), fields(model))]
+    async fn stream_complete(
+        &self,
+        request: &LlmRequest,
+    ) -> Result<Pin<Box<dyn Stream<Item = Result<StreamEvent>> + Send>>> {
+        let body = self.build_request(request);
+        tracing::Span::current().record("model", body.model.as_str());
+        debug!("anthropic streaming request: model={}", body.model);
+
+        let mut body_value = serde_json::to_value(&body)
+            .map_err(|e| Error::Agent(format!("failed to serialize request: {e}")))?;
+        body_value["stream"] = serde_json::Value::Bool(true);
+
+        let response = self
+            .client
+            .post(self.endpoint())
+            .header("x-api-key", &self.api_key)
+            .header("anthropic-version", API_VERSION)
+            .header("content-type", "application/json")
+            .json(&body_value)
+            .send()
+            .await
+            .map_err(|e| Error::Agent(format!("anthropic stream request failed: {e}")))?;
+
+        if !response.status().is_success() {
+            let status = response.status();
+            let body = response.text().await.unwrap_or_default();
+            return Err(Error::Agent(format!(
+                "anthropic API error: status={status}, body={body}"
+            )));
+        }
+
+        let byte_stream: Pin<
+            Box<
+                dyn Stream<Item = std::result::Result<bytes::Bytes, reqwest::Error>>
+                    + Send
+                    + 'static,
+            >,
+        > = Box::pin(response.bytes_stream());
+
+        let event_stream = futures::stream::unfold(
+            (byte_stream, String::new()),
+            |(mut stream, mut buffer)| async move {
+                loop {
+                    // Look for complete SSE events (separated by \n\n)
+                    if let Some(pos) = buffer.find("\n\n") {
+                        let event_str = buffer[..pos].to_string();
+                        buffer = buffer[pos + 2..].to_string();
+
+                        // Parse "data: ..." line
+                        let mut data_line = None;
+                        for line in event_str.lines() {
+                            if let Some(d) = line.strip_prefix("data: ") {
+                                data_line = Some(d.to_string());
+                            }
+                        }
+
+                        if let Some(data) = data_line
+                            && let Some(event) = parse_sse_data(&data)
+                        {
+                            return Some((Ok(event), (stream, buffer)));
+                        }
+                        continue;
+                    }
+
+                    // Need more data from the byte stream
+                    match stream.next().await {
+                        Some(Ok(bytes)) => {
+                            buffer.push_str(&String::from_utf8_lossy(&bytes));
+                        }
+                        Some(Err(e)) => {
+                            return Some((
+                                Err(Error::Agent(format!("stream read error: {e}"))),
+                                (stream, buffer),
+                            ));
+                        }
+                        None => {
+                            return None;
+                        }
+                    }
+                }
+            },
+        );
+
+        Ok(Box::pin(event_stream))
+    }
+
     async fn health_check(&self) -> Result<bool> {
         let request = LlmRequest {
             model: self.model.clone(),
@@ -200,6 +291,89 @@ struct AnthropicResponse {
 struct AnthropicUsage {
     input_tokens: u32,
     output_tokens: u32,
+}
+
+// --- SSE Parsing ---
+
+#[derive(Debug, Deserialize)]
+struct SseData {
+    #[serde(rename = "type")]
+    event_type: String,
+    #[serde(default)]
+    index: Option<usize>,
+    #[serde(default)]
+    content_block: Option<SseContentBlock>,
+    #[serde(default)]
+    delta: Option<SseDelta>,
+    #[serde(default)]
+    usage: Option<AnthropicUsage>,
+}
+
+#[derive(Debug, Deserialize)]
+struct SseContentBlock {
+    #[serde(rename = "type")]
+    block_type: String,
+    #[serde(default)]
+    id: Option<String>,
+    #[serde(default)]
+    name: Option<String>,
+}
+
+#[derive(Debug, Deserialize)]
+struct SseDelta {
+    #[serde(rename = "type", default)]
+    delta_type: String,
+    #[serde(default)]
+    text: Option<String>,
+    #[serde(default)]
+    partial_json: Option<String>,
+    #[serde(default)]
+    stop_reason: Option<String>,
+}
+
+fn parse_sse_data(data: &str) -> Option<StreamEvent> {
+    let parsed: SseData = serde_json::from_str(data).ok()?;
+
+    match parsed.event_type.as_str() {
+        "content_block_start" => {
+            let block = parsed.content_block?;
+            let index = parsed.index.unwrap_or(0);
+            if block.block_type == "tool_use" {
+                Some(StreamEvent::ToolUseStart {
+                    index,
+                    id: block.id.unwrap_or_default(),
+                    name: block.name.unwrap_or_default(),
+                })
+            } else {
+                None // text block starts don't need a separate event
+            }
+        }
+        "content_block_delta" => {
+            let delta = parsed.delta?;
+            match delta.delta_type.as_str() {
+                "text_delta" => Some(StreamEvent::TextDelta(delta.text.unwrap_or_default())),
+                "input_json_delta" => Some(StreamEvent::InputJsonDelta(
+                    delta.partial_json.unwrap_or_default(),
+                )),
+                _ => None,
+            }
+        }
+        "content_block_stop" => Some(StreamEvent::ContentBlockStop {
+            index: parsed.index.unwrap_or(0),
+        }),
+        "message_delta" => {
+            let delta = parsed.delta;
+            Some(StreamEvent::MessageDelta {
+                stop_reason: delta.and_then(|d| d.stop_reason),
+                usage: parsed.usage.map(|u| Usage {
+                    input_tokens: u.input_tokens,
+                    output_tokens: u.output_tokens,
+                }),
+            })
+        }
+        "message_stop" => Some(StreamEvent::MessageStop),
+        _ => None,
+    }
 }
 
 // --- Conversion Functions ---

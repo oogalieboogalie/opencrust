@@ -148,11 +148,11 @@ impl Allowlist {
             users: self.allowed_users.iter().cloned().collect(),
         };
 
-        if let Some(parent) = path.parent() {
-            if let Err(e) = std::fs::create_dir_all(parent) {
-                warn!("failed to create allowlist directory: {e}");
-                return;
-            }
+        if let Some(parent) = path.parent()
+            && let Err(e) = std::fs::create_dir_all(parent)
+        {
+            warn!("failed to create allowlist directory: {e}");
+            return;
         }
 
         match serde_json::to_string_pretty(&data) {

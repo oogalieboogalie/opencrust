@@ -2,6 +2,8 @@ pub mod protocol;
 pub mod registry;
 #[cfg(feature = "telegram")]
 pub mod telegram;
+#[cfg(feature = "telegram")]
+pub mod telegram_fmt;
 pub mod traits;
 
 pub use protocol::{

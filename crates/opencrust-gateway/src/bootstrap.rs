@@ -177,6 +177,9 @@ pub fn build_agent_runtime(config: &AppConfig) -> AgentRuntime {
     if let Some(max_tokens) = config.agent.max_tokens {
         runtime.set_max_tokens(max_tokens);
     }
+    if let Some(max_context_tokens) = config.agent.max_context_tokens {
+        runtime.set_max_context_tokens(max_context_tokens);
+    }
 
     runtime
 }
@@ -226,7 +229,11 @@ pub fn build_telegram_channels(
         let pairing_for_cb = Arc::clone(&pairing);
 
         let on_message: opencrust_channels::OnMessageFn = Arc::new(
-            move |chat_id: i64, user_id: String, user_name: String, text: String| {
+            move |chat_id: i64,
+                  user_id: String,
+                  user_name: String,
+                  text: String,
+                  delta_tx: Option<tokio::sync::mpsc::Sender<String>>| {
                 let state = Arc::clone(&state_for_cb);
                 let allowlist = Arc::clone(&allowlist_for_cb);
                 let pairing = Arc::clone(&pairing_for_cb);
@@ -234,6 +241,7 @@ pub fn build_telegram_channels(
                     // --- Bot commands ---
                     if let Some(cmd) = text.strip_prefix('/') {
                         let cmd = cmd.split_whitespace().next().unwrap_or("");
+                        drop(delta_tx); // commands don't stream
                         return handle_command(
                             cmd, &text, &user_id, &user_name, chat_id, &allowlist, &pairing, &state,
                         );
@@ -243,9 +251,9 @@ pub fn build_telegram_channels(
                     {
                         let mut list = allowlist.lock().unwrap();
                         if list.needs_owner() {
-                            // First user auto-becomes owner
                             list.claim_owner(&user_id);
                             info!("telegram: auto-paired owner {} ({})", user_name, user_id);
+                            drop(delta_tx);
                             return Ok(format!(
                                 "Welcome, {}! You are now the owner of this OpenCrust bot.\n\n\
                                  Use /pair to generate a code for adding other users.\n\
@@ -255,7 +263,6 @@ pub fn build_telegram_channels(
                         }
 
                         if !list.is_allowed(&user_id) {
-                            // Try pairing code claim
                             let trimmed = text.trim();
                             if trimmed.len() == 6 && trimmed.chars().all(|c| c.is_ascii_digit()) {
                                 let claimed = pairing.lock().unwrap().claim(trimmed, &user_id);
@@ -265,6 +272,7 @@ pub fn build_telegram_channels(
                                         "telegram: paired user {} ({}) via code",
                                         user_name, user_id
                                     );
+                                    drop(delta_tx);
                                     return Ok(format!(
                                         "Welcome, {}! You now have access to this bot.",
                                         user_name
@@ -276,6 +284,7 @@ pub fn build_telegram_channels(
                                 "telegram: unauthorized user {} ({}) in chat {}",
                                 user_name, user_id, chat_id
                             );
+                            drop(delta_tx);
                             return Err("__blocked__".to_string());
                         }
                     }
@@ -285,6 +294,7 @@ pub fn build_telegram_channels(
 
                     let text = opencrust_security::InputValidator::sanitize(&text);
                     if opencrust_security::InputValidator::check_prompt_injection(&text) {
+                        drop(delta_tx);
                         return Err(
                             "input rejected: potential prompt injection detected".to_string()
                         );
@@ -305,11 +315,20 @@ pub fn build_telegram_channels(
                         .map(|s| s.history.clone())
                         .unwrap_or_default();
 
-                    let response = state
-                        .agents
-                        .process_message(&session_id, &text, &history)
-                        .await
-                        .map_err(|e| e.to_string())?;
+                    // Use streaming when delta_tx is available
+                    let response = if let Some(tx) = delta_tx {
+                        state
+                            .agents
+                            .process_message_streaming(&session_id, &text, &history, tx)
+                            .await
+                            .map_err(|e| e.to_string())?
+                    } else {
+                        state
+                            .agents
+                            .process_message(&session_id, &text, &history)
+                            .await
+                            .map_err(|e| e.to_string())?
+                    };
 
                     if let Some(mut session) = state.sessions.get_mut(&session_id) {
                         session.history.push(ChatMessage {

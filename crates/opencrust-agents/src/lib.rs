@@ -12,7 +12,7 @@ pub use ollama::OllamaProvider;
 pub use openai::OpenAiProvider;
 pub use providers::{
     ChatMessage, ChatRole, ContentBlock, LlmProvider, LlmRequest, LlmResponse, MessagePart,
-    ToolDefinition,
+    StreamEvent, ToolDefinition,
 };
 pub use runtime::AgentRuntime;
 pub use tools::{BashTool, FileReadTool, FileWriteTool, Tool, ToolOutput, WebFetchTool};

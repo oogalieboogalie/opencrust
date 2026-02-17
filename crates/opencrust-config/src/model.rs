@@ -130,6 +130,7 @@ pub struct AgentConfig {
     pub system_prompt: Option<String>,
     pub default_provider: Option<String>,
     pub max_tokens: Option<u32>,
+    pub max_context_tokens: Option<usize>,
 }
 
 fn default_memory_enabled() -> bool {

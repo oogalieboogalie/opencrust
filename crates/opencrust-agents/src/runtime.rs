@@ -1,13 +1,16 @@
 use std::sync::Arc;
 
+use futures::StreamExt;
 use futures::future::join_all;
 use opencrust_common::{Error, Result};
 use opencrust_db::{MemoryEntry, MemoryProvider, MemoryRole, NewMemoryEntry, RecallQuery};
+use tokio::sync::mpsc;
 use tracing::{info, instrument, warn};
 
 use crate::embeddings::EmbeddingProvider;
 use crate::providers::{
-    ChatMessage, ChatRole, ContentBlock, LlmProvider, LlmRequest, MessagePart, ToolDefinition,
+    ChatMessage, ChatRole, ContentBlock, LlmProvider, LlmRequest, MessagePart, StreamEvent,
+    ToolDefinition,
 };
 use crate::tools::{Tool, ToolOutput};
 
@@ -23,6 +26,7 @@ pub struct AgentRuntime {
     tools: Vec<Box<dyn Tool>>,
     system_prompt: Option<String>,
     max_tokens: Option<u32>,
+    max_context_tokens: Option<usize>,
 }
 
 impl AgentRuntime {
@@ -35,6 +39,7 @@ impl AgentRuntime {
             tools: Vec::new(),
             system_prompt: None,
             max_tokens: None,
+            max_context_tokens: None,
         }
     }
 
@@ -44,6 +49,10 @@ impl AgentRuntime {
 
     pub fn set_max_tokens(&mut self, max_tokens: u32) {
         self.max_tokens = Some(max_tokens);
+    }
+
+    pub fn set_max_context_tokens(&mut self, max_context_tokens: usize) {
+        self.max_context_tokens = Some(max_context_tokens);
     }
 
     pub fn register_provider(&mut self, provider: Box<dyn LlmProvider>) {
@@ -248,6 +257,10 @@ impl AgentRuntime {
             content: MessagePart::Text(user_text.to_string()),
         });
 
+        // Trim conversation history to fit context window
+        let max_ctx = self.max_context_tokens.unwrap_or(100_000);
+        trim_messages_to_budget(&mut messages, &system, &tool_defs, max_ctx);
+
         for _iteration in 0..MAX_TOOL_ITERATIONS {
             let request = LlmRequest {
                 model: String::new(),
@@ -308,6 +321,234 @@ impl AgentRuntime {
                 role: ChatRole::User,
                 content: MessagePart::Parts(tool_results),
             });
+        }
+
+        Err(Error::Agent(format!(
+            "tool loop exceeded maximum of {} iterations",
+            MAX_TOOL_ITERATIONS
+        )))
+    }
+
+    /// Run the conversation loop with streaming. Text deltas are sent through
+    /// `delta_tx` as they arrive. Returns the final accumulated response text.
+    #[instrument(skip(self, conversation_history, delta_tx), fields(provider_id))]
+    pub async fn process_message_streaming(
+        &self,
+        session_id: &str,
+        user_text: &str,
+        conversation_history: &[ChatMessage],
+        delta_tx: mpsc::Sender<String>,
+    ) -> Result<String> {
+        let provider = self
+            .default_provider()
+            .ok_or_else(|| Error::Agent("no LLM provider configured".into()))?;
+
+        // Build system message (same as process_message)
+        let memory_context = match self
+            .recall_context(user_text, Some(session_id), None, 5)
+            .await
+        {
+            Ok(entries) if !entries.is_empty() => {
+                let context: Vec<String> = entries.iter().map(|e| e.content.clone()).collect();
+                Some(format!(
+                    "Relevant context from memory:\n- {}",
+                    context.join("\n- ")
+                ))
+            }
+            Err(e) => {
+                warn!("memory recall failed, continuing without context: {}", e);
+                None
+            }
+            _ => None,
+        };
+
+        let system = match (&self.system_prompt, memory_context) {
+            (Some(prompt), Some(ctx)) => Some(format!("{prompt}\n\n{ctx}")),
+            (Some(prompt), None) => Some(prompt.clone()),
+            (None, Some(ctx)) => Some(ctx),
+            (None, None) => None,
+        };
+
+        let tool_defs = self.tool_definitions();
+
+        let mut messages: Vec<ChatMessage> = conversation_history.to_vec();
+        messages.push(ChatMessage {
+            role: ChatRole::User,
+            content: MessagePart::Text(user_text.to_string()),
+        });
+
+        let max_ctx = self.max_context_tokens.unwrap_or(100_000);
+        trim_messages_to_budget(&mut messages, &system, &tool_defs, max_ctx);
+
+        let mut full_response = String::new();
+
+        for _iteration in 0..MAX_TOOL_ITERATIONS {
+            let request = LlmRequest {
+                model: String::new(),
+                messages: messages.clone(),
+                system: system.clone(),
+                max_tokens: Some(self.max_tokens.unwrap_or(4096)),
+                temperature: None,
+                tools: tool_defs.clone(),
+            };
+
+            // Try streaming; fall back to non-streaming if not supported
+            let stream_result = provider.stream_complete(&request).await;
+
+            match stream_result {
+                Ok(mut stream) => {
+                    // Consume stream, collecting the full response and forwarding text deltas
+                    let mut response_text = String::new();
+                    let mut tool_uses: Vec<(String, String, String)> = Vec::new(); // (id, name, input_json)
+                    let mut current_tool: Option<(String, String, String)> = None;
+                    let mut _stop_reason: Option<String> = None;
+
+                    while let Some(event) = stream.next().await {
+                        match event? {
+                            StreamEvent::TextDelta(text) => {
+                                response_text.push_str(&text);
+                                let _ = delta_tx.send(text).await;
+                            }
+                            StreamEvent::ToolUseStart { id, name, .. } => {
+                                current_tool = Some((id, name, String::new()));
+                            }
+                            StreamEvent::InputJsonDelta(json) => {
+                                if let Some((_, _, ref mut input)) = current_tool {
+                                    input.push_str(&json);
+                                }
+                            }
+                            StreamEvent::ContentBlockStop { .. } => {
+                                if let Some(tool) = current_tool.take() {
+                                    tool_uses.push(tool);
+                                }
+                            }
+                            StreamEvent::MessageDelta {
+                                stop_reason: sr, ..
+                            } => {
+                                _stop_reason = sr;
+                            }
+                            StreamEvent::MessageStop => break,
+                        }
+                    }
+
+                    if tool_uses.is_empty() {
+                        full_response.push_str(&response_text);
+
+                        if let Err(e) = self
+                            .remember_turn(session_id, None, None, user_text, &full_response)
+                            .await
+                        {
+                            warn!("failed to store turn in memory: {}", e);
+                        }
+
+                        return Ok(full_response);
+                    }
+
+                    // Build assistant response with text + tool_use blocks
+                    let mut content_blocks = Vec::new();
+                    if !response_text.is_empty() {
+                        content_blocks.push(ContentBlock::Text {
+                            text: response_text.clone(),
+                        });
+                        full_response.push_str(&response_text);
+                    }
+
+                    for (id, name, input_json) in &tool_uses {
+                        let input: serde_json::Value =
+                            serde_json::from_str(input_json).unwrap_or_default();
+                        content_blocks.push(ContentBlock::ToolUse {
+                            id: id.clone(),
+                            name: name.clone(),
+                            input,
+                        });
+                    }
+
+                    messages.push(ChatMessage {
+                        role: ChatRole::Assistant,
+                        content: MessagePart::Parts(content_blocks),
+                    });
+
+                    // Execute tools
+                    let mut tool_results = Vec::new();
+                    for (id, name, input_json) in &tool_uses {
+                        let input: serde_json::Value =
+                            serde_json::from_str(input_json).unwrap_or_default();
+                        let output = match self.find_tool(name) {
+                            Some(tool) => tool
+                                .execute(input)
+                                .await
+                                .unwrap_or_else(|e| ToolOutput::error(e.to_string())),
+                            None => ToolOutput::error(format!("unknown tool: {}", name)),
+                        };
+                        tool_results.push(ContentBlock::ToolResult {
+                            tool_use_id: id.clone(),
+                            content: output.content,
+                        });
+                    }
+
+                    messages.push(ChatMessage {
+                        role: ChatRole::User,
+                        content: MessagePart::Parts(tool_results),
+                    });
+
+                    // Add separator between iterations
+                    if !full_response.is_empty() {
+                        full_response.push_str("\n\n");
+                        let _ = delta_tx.send("\n\n".to_string()).await;
+                    }
+                }
+                Err(_) => {
+                    // Streaming not supported — fall back to non-streaming
+                    let response = provider.complete(&request).await?;
+
+                    let has_tool_use = response
+                        .content
+                        .iter()
+                        .any(|block| matches!(block, ContentBlock::ToolUse { .. }));
+
+                    if !has_tool_use {
+                        let final_text = extract_text(&response.content);
+                        let _ = delta_tx.send(final_text.clone()).await;
+                        full_response.push_str(&final_text);
+
+                        if let Err(e) = self
+                            .remember_turn(session_id, None, None, user_text, &full_response)
+                            .await
+                        {
+                            warn!("failed to store turn in memory: {}", e);
+                        }
+
+                        return Ok(full_response);
+                    }
+
+                    messages.push(ChatMessage {
+                        role: ChatRole::Assistant,
+                        content: MessagePart::Parts(response.content.clone()),
+                    });
+
+                    let mut tool_results = Vec::new();
+                    for block in &response.content {
+                        if let ContentBlock::ToolUse { id, name, input } = block {
+                            let output = match self.find_tool(name) {
+                                Some(tool) => tool
+                                    .execute(input.clone())
+                                    .await
+                                    .unwrap_or_else(|e| ToolOutput::error(e.to_string())),
+                                None => ToolOutput::error(format!("unknown tool: {}", name)),
+                            };
+                            tool_results.push(ContentBlock::ToolResult {
+                                tool_use_id: id.clone(),
+                                content: output.content,
+                            });
+                        }
+                    }
+
+                    messages.push(ChatMessage {
+                        role: ChatRole::User,
+                        content: MessagePart::Parts(tool_results),
+                    });
+                }
+            }
         }
 
         Err(Error::Agent(format!(
@@ -378,6 +619,50 @@ impl AgentRuntime {
 impl Default for AgentRuntime {
     fn default() -> Self {
         Self::new()
+    }
+}
+
+/// Rough token estimate: ~4 characters per token.
+fn estimate_tokens(
+    messages: &[ChatMessage],
+    system: &Option<String>,
+    tools: &[ToolDefinition],
+) -> usize {
+    let mut chars: usize = 0;
+    if let Some(s) = system {
+        chars += s.len();
+    }
+    for msg in messages {
+        match &msg.content {
+            MessagePart::Text(t) => chars += t.len(),
+            MessagePart::Parts(parts) => {
+                for part in parts {
+                    match part {
+                        ContentBlock::Text { text } => chars += text.len(),
+                        ContentBlock::ToolUse { input, .. } => chars += input.to_string().len(),
+                        ContentBlock::ToolResult { content, .. } => chars += content.len(),
+                        ContentBlock::Image { .. } => chars += 1000,
+                    }
+                }
+            }
+        }
+    }
+    for tool in tools {
+        chars += tool.description.len() + tool.input_schema.to_string().len();
+    }
+    chars / 4
+}
+
+/// Drop the oldest messages until the estimated token count fits the budget.
+/// Always keeps at least the last message (the current user input).
+fn trim_messages_to_budget(
+    messages: &mut Vec<ChatMessage>,
+    system: &Option<String>,
+    tools: &[ToolDefinition],
+    max_tokens: usize,
+) {
+    while messages.len() > 1 && estimate_tokens(messages, system, tools) > max_tokens {
+        messages.remove(0);
     }
 }
 
