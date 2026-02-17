@@ -5,7 +5,9 @@ use opencrust_config::{AppConfig, ConfigWatcher};
 use tokio::net::TcpListener;
 use tracing::{info, warn};
 
-use crate::bootstrap::{build_agent_runtime, build_telegram_channels};
+use crate::bootstrap::{
+    build_agent_runtime, build_channels, build_telegram_channels, spawn_discord_listener,
+};
 use crate::router::build_router;
 use crate::state::AppState;
 
@@ -23,7 +25,8 @@ impl GatewayServer {
         let addr = format!("{}:{}", self.config.gateway.host, self.config.gateway.port);
 
         let agents = build_agent_runtime(&self.config);
-        let mut state = AppState::new(self.config, agents);
+        let (channels, discord_rx) = build_channels(&self.config).await;
+        let mut state = AppState::new(self.config, agents, channels);
 
         // Start config hot-reload watcher
         let config_path = dirs::home_dir()
@@ -33,8 +36,7 @@ impl GatewayServer {
         if config_path.exists() {
             match ConfigWatcher::start(config_path.clone(), state.current_config()) {
                 Ok((_watcher, rx)) => {
-                    // Keep watcher alive by leaking it (lives for the process lifetime).
-                    // This is intentional — the watcher must outlive the server.
+                    // Keep watcher alive for the process lifetime.
                     let watcher = Box::new(_watcher);
                     Box::leak(watcher);
 
@@ -52,6 +54,11 @@ impl GatewayServer {
         // Spawn background tasks
         state.spawn_session_cleanup();
         state.spawn_config_applier();
+
+        // Start Discord message listener if connected
+        if let Some(rx) = discord_rx {
+            spawn_discord_listener(Arc::clone(&state), rx);
+        }
 
         // Start configured Telegram channels
         let telegram_channels = build_telegram_channels(&state.config, &state);

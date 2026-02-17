@@ -27,9 +27,9 @@ anyhow = { workspace = true }
 serde_json = { workspace = true }
 reqwest = { workspace = true }
 dialoguer = "0.11"
-daemonize = "0.5"
 serde_yaml = { workspace = true }
 dirs = "6"
 
 [target.'cfg(unix)'.dependencies]
 libc = "0.2"
+daemonize = "0.5"

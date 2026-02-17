@@ -20,3 +20,5 @@ Thumbs.db
 
 # Config (local secrets)
 credentials/
+
+config.yml

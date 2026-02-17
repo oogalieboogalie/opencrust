@@ -6,6 +6,9 @@ pub mod telegram;
 pub mod telegram_fmt;
 pub mod traits;
 
+#[cfg(feature = "discord")]
+pub mod discord;
+
 pub use protocol::{
     CONNECTOR_PROTOCOL_VERSION, ConnectorCapability, ConnectorFrame, ConnectorHandshake,
     MAX_CONNECTOR_FRAME_BYTES,
