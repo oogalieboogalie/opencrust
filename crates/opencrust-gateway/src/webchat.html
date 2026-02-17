@@ -1,0 +1,543 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>OpenCrust Chat</title>
+  <style>
+    :root {
+      --bg-a: #0f172a;
+      --bg-b: #1f2937;
+      --panel: #111827;
+      --panel-edge: #334155;
+      --ink: #e5e7eb;
+      --muted: #9ca3af;
+      --accent: #22d3ee;
+      --accent-2: #14b8a6;
+      --good: #22c55e;
+      --bad: #ef4444;
+    }
+
+    * { box-sizing: border-box; }
+
+    body {
+      margin: 0;
+      min-height: 100vh;
+      font-family: "Fira Sans", "Segoe UI", Tahoma, sans-serif;
+      color: var(--ink);
+      background:
+        radial-gradient(900px 500px at 0% 0%, #0b2135 0%, transparent 60%),
+        radial-gradient(700px 500px at 100% 0%, #0f3a3a 0%, transparent 60%),
+        linear-gradient(140deg, var(--bg-a), var(--bg-b));
+    }
+
+    .wrap {
+      max-width: 980px;
+      margin: 0 auto;
+      padding: 18px;
+    }
+
+    .layout {
+      display: grid;
+      grid-template-columns: 280px 1fr;
+      gap: 14px;
+      align-items: start;
+    }
+
+    .header {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      gap: 12px;
+      margin-bottom: 14px;
+    }
+
+    .title {
+      margin: 0;
+      font-size: 1.35rem;
+      letter-spacing: 0.4px;
+    }
+
+    .pill {
+      border: 1px solid var(--panel-edge);
+      background: rgba(2, 6, 23, 0.6);
+      padding: 6px 10px;
+      border-radius: 999px;
+      font-size: 0.85rem;
+      color: var(--muted);
+      white-space: nowrap;
+    }
+
+    .online { color: var(--good); }
+    .offline { color: var(--bad); }
+
+    .card {
+      border: 1px solid var(--panel-edge);
+      background: rgba(15, 23, 42, 0.8);
+      border-radius: 14px;
+      overflow: hidden;
+      backdrop-filter: blur(4px);
+    }
+
+    .sidebar {
+      border: 1px solid var(--panel-edge);
+      background: rgba(2, 6, 23, 0.75);
+      border-radius: 14px;
+      padding: 12px;
+      display: grid;
+      gap: 10px;
+    }
+
+    .sidebar h2 {
+      margin: 0;
+      font-size: 1rem;
+      letter-spacing: 0.3px;
+    }
+
+    .hint {
+      margin: 0;
+      font-size: 0.82rem;
+      color: var(--muted);
+      line-height: 1.35;
+    }
+
+    .key-list {
+      display: grid;
+      gap: 8px;
+    }
+
+    .key-row {
+      display: grid;
+      gap: 6px;
+      font-size: 0.85rem;
+      color: var(--muted);
+    }
+
+    .key-row input {
+      width: 100%;
+      border: 1px solid #334155;
+      background: #0b1220;
+      color: var(--ink);
+      border-radius: 8px;
+      padding: 8px 9px;
+      font-family: inherit;
+      font-size: 0.88rem;
+    }
+
+    .key-row input:focus {
+      outline: none;
+      border-color: #06b6d4;
+      box-shadow: 0 0 0 2px rgba(6, 182, 212, 0.2);
+    }
+
+    .chat {
+      height: 58vh;
+      min-height: 340px;
+      overflow-y: auto;
+      padding: 16px;
+      display: flex;
+      flex-direction: column;
+      gap: 12px;
+    }
+
+    .msg {
+      max-width: 88%;
+      padding: 10px 12px;
+      border-radius: 12px;
+      line-height: 1.35;
+      border: 1px solid transparent;
+      white-space: pre-wrap;
+      word-wrap: break-word;
+    }
+
+    .sys {
+      align-self: center;
+      font-size: 0.85rem;
+      color: var(--muted);
+      border-color: #334155;
+      background: rgba(15, 23, 42, 0.7);
+    }
+
+    .user {
+      align-self: flex-end;
+      background: linear-gradient(135deg, #0e7490, #155e75);
+      border-color: #0ea5e9;
+    }
+
+    .assistant {
+      align-self: flex-start;
+      background: linear-gradient(135deg, #1f2937, #111827);
+      border-color: #475569;
+    }
+
+    .error {
+      align-self: flex-start;
+      background: rgba(127, 29, 29, 0.35);
+      border-color: #dc2626;
+    }
+
+    .controls {
+      border-top: 1px solid var(--panel-edge);
+      background: rgba(2, 6, 23, 0.75);
+      padding: 12px;
+      display: grid;
+      gap: 10px;
+    }
+
+    .status-row {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      gap: 10px;
+      flex-wrap: wrap;
+      font-size: 0.9rem;
+      color: var(--muted);
+    }
+
+    .actions {
+      display: flex;
+      gap: 8px;
+      flex-wrap: wrap;
+    }
+
+    button {
+      border: 1px solid #334155;
+      background: #111827;
+      color: var(--ink);
+      border-radius: 10px;
+      padding: 8px 11px;
+      cursor: pointer;
+      transition: 120ms ease;
+      font-weight: 600;
+    }
+
+    button:hover { transform: translateY(-1px); border-color: #64748b; }
+
+    button.primary {
+      background: linear-gradient(135deg, var(--accent), var(--accent-2));
+      color: #082f49;
+      border-color: transparent;
+    }
+
+    .composer {
+      display: grid;
+      grid-template-columns: 1fr auto;
+      gap: 8px;
+    }
+
+    textarea {
+      width: 100%;
+      resize: vertical;
+      min-height: 58px;
+      max-height: 200px;
+      padding: 10px 12px;
+      border-radius: 10px;
+      border: 1px solid #334155;
+      background: #0b1220;
+      color: var(--ink);
+      font-family: inherit;
+      font-size: 0.96rem;
+    }
+
+    textarea:focus {
+      outline: none;
+      border-color: #06b6d4;
+      box-shadow: 0 0 0 2px rgba(6, 182, 212, 0.2);
+    }
+
+    code {
+      color: #67e8f9;
+      font-family: Consolas, "Liberation Mono", monospace;
+    }
+
+    @media (max-width: 900px) {
+      .layout {
+        grid-template-columns: 1fr;
+      }
+    }
+  </style>
+</head>
+<body>
+  <main class="wrap">
+    <div class="header">
+      <h1 class="title">OpenCrust Local Chat</h1>
+      <div class="pill" id="conn-pill"><span class="offline">Disconnected</span></div>
+    </div>
+
+    <div class="layout">
+      <aside class="sidebar">
+        <h2>Integrations</h2>
+        <p class="hint">Prepare API keys for future providers. Stored in this browser only for now.</p>
+        <div class="key-list">
+          <label class="key-row">
+            <span>OpenAI API Key</span>
+            <input id="key-openai" type="password" placeholder="sk-..." autocomplete="off">
+          </label>
+          <label class="key-row">
+            <span>Anthropic API Key</span>
+            <input id="key-anthropic" type="password" placeholder="sk-ant-..." autocomplete="off">
+          </label>
+          <label class="key-row">
+            <span>MiniMax API Key</span>
+            <input id="key-minimax" type="password" placeholder="mm-..." autocomplete="off">
+          </label>
+        </div>
+        <div class="actions">
+          <button id="save-keys">Save Keys</button>
+          <button id="clear-keys">Clear Keys</button>
+        </div>
+        <p class="hint" id="key-status">No keys saved yet.</p>
+      </aside>
+
+      <section class="card">
+        <div id="chat" class="chat"></div>
+        <div class="controls">
+          <div class="status-row">
+            <div>Session: <code id="session">none</code></div>
+            <div id="api-status">Gateway status: unknown</div>
+          </div>
+          <div class="actions">
+            <button id="refresh">Refresh Status</button>
+            <button id="reconnect">Reconnect</button>
+            <button id="clear">Clear Chat</button>
+          </div>
+          <div class="composer">
+            <textarea id="input" placeholder="Type a message. Enter sends, Shift+Enter makes a new line."></textarea>
+            <button id="send" class="primary">Send</button>
+          </div>
+        </div>
+      </section>
+    </div>
+  </main>
+
+  <script>
+    const chatEl = document.getElementById("chat");
+    const inputEl = document.getElementById("input");
+    const sendBtn = document.getElementById("send");
+    const reconnectBtn = document.getElementById("reconnect");
+    const refreshBtn = document.getElementById("refresh");
+    const clearBtn = document.getElementById("clear");
+    const connPill = document.getElementById("conn-pill");
+    const sessionEl = document.getElementById("session");
+    const apiStatusEl = document.getElementById("api-status");
+    const keyOpenAiEl = document.getElementById("key-openai");
+    const keyAnthropicEl = document.getElementById("key-anthropic");
+    const keyMinimaxEl = document.getElementById("key-minimax");
+    const saveKeysBtn = document.getElementById("save-keys");
+    const clearKeysBtn = document.getElementById("clear-keys");
+    const keyStatusEl = document.getElementById("key-status");
+
+    const storageKey = "opencrust.session_id";
+    const keyStoragePrefix = "opencrust.key.";
+    let sessionId = localStorage.getItem(storageKey) || "";
+    let socket = null;
+    let reconnectTimer = null;
+
+    function wsUrl() {
+      const proto = location.protocol === "https:" ? "wss:" : "ws:";
+      return `${proto}//${location.host}/ws`;
+    }
+
+    function setConnectionState(isConnected) {
+      connPill.innerHTML = isConnected
+        ? '<span class="online">Connected</span>'
+        : '<span class="offline">Disconnected</span>';
+    }
+
+    function setSession(id) {
+      sessionId = id || "";
+      if (sessionId) {
+        localStorage.setItem(storageKey, sessionId);
+      } else {
+        localStorage.removeItem(storageKey);
+      }
+      sessionEl.textContent = sessionId || "none";
+    }
+
+    function appendMessage(kind, text) {
+      const div = document.createElement("div");
+      div.className = `msg ${kind}`;
+      div.textContent = text;
+      chatEl.appendChild(div);
+      chatEl.scrollTop = chatEl.scrollHeight;
+    }
+
+    function setKeyStatus(text) {
+      keyStatusEl.textContent = text;
+    }
+
+    function persistKey(name, value) {
+      const key = `${keyStoragePrefix}${name}`;
+      if (value && value.trim()) {
+        localStorage.setItem(key, value.trim());
+      } else {
+        localStorage.removeItem(key);
+      }
+    }
+
+    function loadKeys() {
+      keyOpenAiEl.value = localStorage.getItem(`${keyStoragePrefix}openai`) || "";
+      keyAnthropicEl.value = localStorage.getItem(`${keyStoragePrefix}anthropic`) || "";
+      keyMinimaxEl.value = localStorage.getItem(`${keyStoragePrefix}minimax`) || "";
+
+      const count =
+        Number(Boolean(keyOpenAiEl.value)) +
+        Number(Boolean(keyAnthropicEl.value)) +
+        Number(Boolean(keyMinimaxEl.value));
+      setKeyStatus(count > 0 ? `${count} key(s) loaded from local storage.` : "No keys saved yet.");
+    }
+
+    function saveKeys() {
+      persistKey("openai", keyOpenAiEl.value);
+      persistKey("anthropic", keyAnthropicEl.value);
+      persistKey("minimax", keyMinimaxEl.value);
+      setKeyStatus("Keys saved locally in this browser.");
+    }
+
+    function clearKeys() {
+      localStorage.removeItem(`${keyStoragePrefix}openai`);
+      localStorage.removeItem(`${keyStoragePrefix}anthropic`);
+      localStorage.removeItem(`${keyStoragePrefix}minimax`);
+      keyOpenAiEl.value = "";
+      keyAnthropicEl.value = "";
+      keyMinimaxEl.value = "";
+      setKeyStatus("Keys cleared.");
+    }
+
+    async function refreshStatus() {
+      try {
+        const r = await fetch("/api/status");
+        const j = await r.json();
+        apiStatusEl.textContent = `Gateway status: ${j.status}, sessions=${j.sessions}`;
+      } catch {
+        apiStatusEl.textContent = "Gateway status: unavailable";
+      }
+    }
+
+    function scheduleReconnect() {
+      if (reconnectTimer) return;
+      reconnectTimer = setTimeout(() => {
+        reconnectTimer = null;
+        connect();
+      }, 2000);
+    }
+
+    function handleServerEvent(raw) {
+      let evt;
+      try {
+        evt = JSON.parse(raw);
+      } catch {
+        appendMessage("sys", `Raw: ${raw}`);
+        return;
+      }
+
+      if (evt.session_id) setSession(evt.session_id);
+
+      switch (evt.type) {
+        case "connected":
+          appendMessage("sys", evt.note ? `Connected (${evt.note}).` : "Connected.");
+          break;
+        case "resumed":
+          appendMessage("sys", `Session resumed (${evt.history_length ?? 0} messages in history).`);
+          break;
+        case "message":
+          appendMessage("assistant", evt.content || "(empty response)");
+          break;
+        case "error":
+          appendMessage("error", `${evt.code || "error"}: ${evt.message || "unknown error"}`);
+          break;
+        default:
+          appendMessage("sys", `Event ${evt.type || "unknown"}: ${JSON.stringify(evt)}`);
+      }
+    }
+
+    function connect() {
+      if (socket && (socket.readyState === WebSocket.OPEN || socket.readyState === WebSocket.CONNECTING)) {
+        return;
+      }
+
+      socket = new WebSocket(wsUrl());
+
+      socket.onopen = () => {
+        setConnectionState(true);
+        appendMessage("sys", "WebSocket connected.");
+        if (sessionId) {
+          socket.send(JSON.stringify({ type: "resume", session_id: sessionId }));
+        }
+      };
+
+      socket.onmessage = (ev) => handleServerEvent(ev.data);
+
+      socket.onclose = () => {
+        setConnectionState(false);
+        appendMessage("sys", "Socket closed. Reconnecting...");
+        scheduleReconnect();
+      };
+
+      socket.onerror = () => {
+        setConnectionState(false);
+      };
+    }
+
+    function reconnectFresh() {
+      if (reconnectTimer) {
+        clearTimeout(reconnectTimer);
+        reconnectTimer = null;
+      }
+      if (socket) {
+        socket.onclose = null;
+        try { socket.close(); } catch {}
+        socket = null;
+      }
+      setConnectionState(false);
+      connect();
+    }
+
+    function sendMessage() {
+      const content = inputEl.value.trim();
+      if (!content) return;
+
+      if (!socket || socket.readyState !== WebSocket.OPEN) {
+        appendMessage("error", "Socket is not connected yet.");
+        return;
+      }
+
+      appendMessage("user", content);
+      socket.send(JSON.stringify({ content }));
+      inputEl.value = "";
+      inputEl.focus();
+    }
+
+    sendBtn.addEventListener("click", sendMessage);
+    inputEl.addEventListener("keydown", (e) => {
+      if (e.key === "Enter" && !e.shiftKey) {
+        e.preventDefault();
+        sendMessage();
+      }
+    });
+
+    reconnectBtn.addEventListener("click", () => {
+      reconnectFresh();
+    });
+
+    clearBtn.addEventListener("click", () => {
+      chatEl.innerHTML = "";
+      setSession("");
+      appendMessage("sys", "Chat cleared. Start typing to create a new session.");
+      reconnectFresh();
+    });
+
+    refreshBtn.addEventListener("click", refreshStatus);
+    saveKeysBtn.addEventListener("click", saveKeys);
+    clearKeysBtn.addEventListener("click", clearKeys);
+
+    setConnectionState(false);
+    setSession(sessionId);
+    loadKeys();
+    appendMessage("sys", "OpenCrust web chat ready.");
+    appendMessage("sys", "Tip: if this is a fresh session, send your first message to initialize it.");
+    refreshStatus();
+    connect();
+  </script>
+</body>
+</html>
