@@ -89,7 +89,7 @@ max_memory_mb = 128
 "#;
         let manifest: PluginManifest = toml::from_str(toml).unwrap();
         assert_eq!(manifest.plugin.name, "test-plugin");
-        assert_eq!(manifest.permissions.filesystem, true);
+        assert!(manifest.permissions.filesystem);
         assert_eq!(manifest.permissions.network, vec!["example.com"]);
         assert_eq!(manifest.limits.timeout_secs, 10);
     }
@@ -103,7 +103,7 @@ version = "0.0.1"
 description = "minimal"
 "#;
         let manifest: PluginManifest = toml::from_str(toml).unwrap();
-        assert_eq!(manifest.permissions.filesystem, false);
+        assert!(!manifest.permissions.filesystem);
         assert!(manifest.permissions.network.is_empty());
         assert_eq!(manifest.limits.timeout_secs, 30); // Default
     }
