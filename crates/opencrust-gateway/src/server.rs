@@ -10,8 +10,8 @@ use tokio::sync::Mutex;
 use tracing::{info, warn};
 
 use crate::bootstrap::{
-    build_agent_runtime, build_channels, build_mcp_tools, build_slack_channels,
-    build_telegram_channels, build_whatsapp_channels, spawn_discord_listener,
+    build_agent_runtime, build_channels, build_discord_channels, build_mcp_tools,
+    build_slack_channels, build_telegram_channels, build_whatsapp_channels,
 };
 use crate::router::build_router;
 use crate::state::AppState;
@@ -37,7 +37,7 @@ impl GatewayServer {
             agents.register_tool(tool);
         }
 
-        let (channels, discord_rx) = build_channels(&self.config).await;
+        let channels = build_channels(&self.config).await;
         let mut state = AppState::new(self.config, agents, channels);
         state.mcp_manager = Some(mcp_manager);
 
@@ -91,9 +91,17 @@ impl GatewayServer {
         state.spawn_session_cleanup();
         state.spawn_config_applier();
 
-        // Start Discord message listener if connected
-        if let Some(rx) = discord_rx {
-            spawn_discord_listener(Arc::clone(&state), rx);
+        // Start configured Discord channels
+        let discord_channels = build_discord_channels(&state.config, &state);
+        for mut channel in discord_channels {
+            tokio::spawn(async move {
+                if let Err(e) = channel.connect().await {
+                    warn!("discord channel failed to connect: {e}");
+                    return;
+                }
+                shutdown_signal().await;
+                channel.disconnect().await.ok();
+            });
         }
 
         // Start background scheduler loop
