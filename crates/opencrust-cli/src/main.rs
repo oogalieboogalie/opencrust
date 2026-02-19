@@ -118,6 +118,10 @@ enum McpCommands {
     List,
     /// Connect to an MCP server and list its tools
     Inspect { name: String },
+    /// List resources from a connected MCP server
+    Resources { name: String },
+    /// List prompts from a connected MCP server
+    Prompts { name: String },
 }
 
 #[derive(Subcommand)]
@@ -494,6 +498,91 @@ async fn main() -> Result<()> {
                             println!("Failed to connect: {e}");
                         }
                     }
+                }
+                McpCommands::Resources { name } => {
+                    let Some(server_config) = mcp_configs.get(&name) else {
+                        println!("MCP server '{}' not found in config", name);
+                        return Ok(());
+                    };
+
+                    println!("Connecting to MCP server '{name}'...");
+                    let manager = opencrust_agents::McpManager::new();
+                    let timeout_secs = server_config.timeout.unwrap_or(30);
+
+                    match manager
+                        .connect(
+                            &name,
+                            &server_config.command,
+                            &server_config.args,
+                            &server_config.env,
+                            timeout_secs,
+                        )
+                        .await
+                    {
+                        Ok(()) => match manager.list_resources(&name).await {
+                            Ok(resources) => {
+                                println!("Resources from '{name}' ({} total):", resources.len());
+                                for r in &resources {
+                                    let desc =
+                                        r.description.as_deref().unwrap_or("(no description)");
+                                    let mime = r
+                                        .mime_type
+                                        .as_deref()
+                                        .map(|m| format!(" [{m}]"))
+                                        .unwrap_or_default();
+                                    println!("  {}{}", r.uri, mime);
+                                    println!("    {} — {desc}", r.name);
+                                }
+                            }
+                            Err(e) => println!("Failed to list resources: {e}"),
+                        },
+                        Err(e) => println!("Failed to connect: {e}"),
+                    }
+                    manager.disconnect(&name).await;
+                }
+                McpCommands::Prompts { name } => {
+                    let Some(server_config) = mcp_configs.get(&name) else {
+                        println!("MCP server '{}' not found in config", name);
+                        return Ok(());
+                    };
+
+                    println!("Connecting to MCP server '{name}'...");
+                    let manager = opencrust_agents::McpManager::new();
+                    let timeout_secs = server_config.timeout.unwrap_or(30);
+
+                    match manager
+                        .connect(
+                            &name,
+                            &server_config.command,
+                            &server_config.args,
+                            &server_config.env,
+                            timeout_secs,
+                        )
+                        .await
+                    {
+                        Ok(()) => match manager.list_prompts(&name).await {
+                            Ok(prompts) => {
+                                println!("Prompts from '{name}' ({} total):", prompts.len());
+                                for p in &prompts {
+                                    let desc =
+                                        p.description.as_deref().unwrap_or("(no description)");
+                                    println!("  {}", p.name);
+                                    println!("    {desc}");
+                                    for arg in &p.arguments {
+                                        let req = if arg.required { " (required)" } else { "" };
+                                        let arg_desc = arg
+                                            .description
+                                            .as_deref()
+                                            .unwrap_or("(no description)");
+                                        println!("    - {}{}: {}", arg.name, req, arg_desc);
+                                    }
+                                }
+                            }
+                            Err(e) => println!("Failed to list prompts: {e}"),
+                        },
+                        Err(e) => println!("Failed to connect: {e}"),
+                    }
+                    manager.disconnect(&name).await;
                 }
             }
         }

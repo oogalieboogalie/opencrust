@@ -272,26 +272,37 @@ pub async fn build_mcp_tools(config: &AppConfig) -> (McpManager, Vec<Box<dyn Too
             continue;
         }
 
-        if server_config.transport != "stdio" {
-            warn!(
-                "MCP server '{name}' uses unsupported transport '{}', skipping (only stdio is supported)",
-                server_config.transport
-            );
-            continue;
-        }
-
         let timeout_secs = server_config.timeout.unwrap_or(30);
 
-        match manager
-            .connect(
-                name,
-                &server_config.command,
-                &server_config.args,
-                &server_config.env,
-                timeout_secs,
-            )
-            .await
-        {
+        let connect_result = match server_config.transport.as_str() {
+            "stdio" => {
+                manager
+                    .connect(
+                        name,
+                        &server_config.command,
+                        &server_config.args,
+                        &server_config.env,
+                        timeout_secs,
+                    )
+                    .await
+            }
+            #[cfg(feature = "mcp-http")]
+            "http" => {
+                let Some(url) = &server_config.url else {
+                    warn!(
+                        "MCP server '{name}' uses HTTP transport but no 'url' configured, skipping"
+                    );
+                    continue;
+                };
+                manager.connect_http(name, url, timeout_secs).await
+            }
+            other => {
+                warn!("MCP server '{name}' uses unsupported transport '{other}', skipping");
+                continue;
+            }
+        };
+
+        match connect_result {
             Ok(()) => {
                 let tools = manager
                     .take_tools(name, std::time::Duration::from_secs(timeout_secs))

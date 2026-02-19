@@ -21,8 +21,10 @@ pub struct AppState {
     pub channels: ChannelRegistry,
     pub agents: AgentRuntime,
     pub sessions: DashMap<String, SessionState>,
-    /// MCP server connection manager.
+    /// MCP server connection manager (legacy, for backward compat).
     pub mcp_manager: Option<opencrust_agents::McpManager>,
+    /// MCP manager wrapped in Arc for health monitoring.
+    pub mcp_manager_arc: Option<Arc<opencrust_agents::McpManager>>,
     pub session_store: Option<Arc<Mutex<SessionStore>>>,
     /// Receives hot-reloaded config updates. `None` if watcher is not active.
     config_rx: Option<watch::Receiver<AppConfig>>,
@@ -50,6 +52,7 @@ impl AppState {
             agents,
             sessions: DashMap::new(),
             mcp_manager: None,
+            mcp_manager_arc: None,
             session_store: None,
             config_rx: None,
         }

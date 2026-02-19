@@ -87,11 +87,22 @@ impl GatewayServer {
             }
         }
 
+        // Wrap MCP manager in Arc for health monitor before moving into state
+        let mcp_manager_arc = state.mcp_manager.take().map(|m| Arc::new(m));
+        if let Some(ref arc) = mcp_manager_arc {
+            state.mcp_manager_arc = Some(Arc::clone(arc));
+        }
+
         let state = Arc::new(state);
 
         // Spawn background tasks
         state.spawn_session_cleanup();
         state.spawn_config_applier();
+
+        // Spawn MCP health monitor for auto-reconnect
+        if let Some(ref arc) = mcp_manager_arc {
+            arc.spawn_health_monitor();
+        }
 
         // Start configured Discord channels
         let discord_channels = build_discord_channels(&state.config, &state);
@@ -189,7 +200,10 @@ impl GatewayServer {
         .map_err(|e| opencrust_common::Error::Gateway(format!("server error: {e}")))?;
 
         // Disconnect MCP servers on shutdown
-        if let Some(ref manager) = state_for_shutdown.mcp_manager {
+        if let Some(ref manager) = state_for_shutdown.mcp_manager_arc {
+            info!("disconnecting MCP servers...");
+            manager.disconnect_all().await;
+        } else if let Some(ref manager) = state_for_shutdown.mcp_manager {
             info!("disconnecting MCP servers...");
             manager.disconnect_all().await;
         }

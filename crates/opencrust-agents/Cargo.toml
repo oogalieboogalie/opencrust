@@ -25,6 +25,7 @@ rmcp = { workspace = true, features = ["client", "transport-child-process", "tra
 [features]
 default = []
 mcp = ["dep:rmcp"]
+mcp-http = ["mcp", "rmcp?/transport-streamable-http-client-reqwest"]
 
 [dev-dependencies]
 tempfile = "3"
