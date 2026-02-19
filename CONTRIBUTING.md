@@ -33,7 +33,7 @@ cargo fmt
 
 | Priority | Issue | Description |
 |----------|-------|-------------|
-| **P0** | [#104](https://github.com/opencrust-org/opencrust/issues/104) | Website: opencrust.dev with alternatives pages |
+| **P0** | [#104](https://github.com/opencrust-org/opencrust/issues/104) | Website: opencrust.org with alternatives pages |
 | **P0** | [#105](https://github.com/opencrust-org/opencrust/issues/105) | Discord community |
 | **P1** | [#106](https://github.com/opencrust-org/opencrust/issues/106) | Built-in starter skills |
 | **P1** | [#107](https://github.com/opencrust-org/opencrust/issues/107) | Scheduling hardening |
