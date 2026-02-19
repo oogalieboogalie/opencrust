@@ -30,6 +30,11 @@ pub struct AppConfig {
 
     #[serde(default)]
     pub mcp: HashMap<String, McpServerConfig>,
+
+    /// Named agent configurations for multi-agent routing.
+    /// If empty, the single `agent:` block is used as "default".
+    #[serde(default)]
+    pub agents: HashMap<String, NamedAgentConfig>,
 }
 
 impl Default for AppConfig {
@@ -44,6 +49,7 @@ impl Default for AppConfig {
             data_dir: None,
             log_level: Some("info".to_string()),
             mcp: HashMap::new(),
+            agents: HashMap::new(),
         }
     }
 }
@@ -169,6 +175,24 @@ pub struct AgentConfig {
     pub default_provider: Option<String>,
     pub max_tokens: Option<u32>,
     pub max_context_tokens: Option<usize>,
+}
+
+/// A named agent configuration for multi-agent routing.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct NamedAgentConfig {
+    /// Which LLM provider key (from `llm:` section) to use.
+    pub provider: Option<String>,
+    /// Override model name (otherwise uses the provider's default).
+    pub model: Option<String>,
+    /// Custom system prompt for this agent.
+    pub system_prompt: Option<String>,
+    /// Max output tokens.
+    pub max_tokens: Option<u32>,
+    /// Max context window tokens.
+    pub max_context_tokens: Option<usize>,
+    /// Restrict which tools this agent can use (empty = all tools).
+    #[serde(default)]
+    pub tools: Vec<String>,
 }
 
 fn default_memory_enabled() -> bool {

@@ -267,6 +267,134 @@ impl AgentRuntime {
         .await
     }
 
+    /// Process a message with explicit agent config overrides (for multi-agent routing).
+    pub async fn process_message_with_agent_config(
+        &self,
+        session_id: &str,
+        user_text: &str,
+        conversation_history: &[ChatMessage],
+        continuity_key: Option<&str>,
+        user_id: Option<&str>,
+        provider_id: Option<&str>,
+        system_prompt_override: Option<&str>,
+        max_tokens_override: Option<u32>,
+    ) -> Result<String> {
+        let provider = if let Some(pid) = provider_id {
+            self.get_provider(pid)
+                .ok_or_else(|| Error::Agent(format!("provider '{pid}' not found")))?
+        } else {
+            self.default_provider()
+                .ok_or_else(|| Error::Agent("no LLM provider configured".into()))?
+        };
+
+        let effective_system_prompt = system_prompt_override
+            .map(|s| s.to_string())
+            .or_else(|| self.system_prompt.clone());
+        let effective_max_tokens = max_tokens_override.or(self.max_tokens).unwrap_or(4096);
+
+        let memory_context = match self
+            .recall_context(user_text, Some(session_id), continuity_key, 5)
+            .await
+        {
+            Ok(entries) if !entries.is_empty() => {
+                let context: Vec<String> = entries.iter().map(|e| e.content.clone()).collect();
+                Some(format!(
+                    "Relevant context from memory:\n- {}",
+                    context.join("\n- ")
+                ))
+            }
+            Err(e) => {
+                warn!("memory recall failed, continuing without context: {}", e);
+                None
+            }
+            _ => None,
+        };
+
+        let system = match (&effective_system_prompt, memory_context) {
+            (Some(prompt), Some(ctx)) => Some(format!("{prompt}\n\n{ctx}")),
+            (Some(prompt), None) => Some(prompt.clone()),
+            (None, Some(ctx)) => Some(ctx),
+            (None, None) => None,
+        };
+
+        let tool_defs = self.tool_definitions();
+
+        let mut messages: Vec<ChatMessage> = conversation_history.to_vec();
+        messages.push(ChatMessage {
+            role: ChatRole::User,
+            content: MessagePart::Text(user_text.to_string()),
+        });
+
+        let max_ctx = self.max_context_tokens.unwrap_or(100_000);
+        trim_messages_to_budget(&mut messages, &system, &tool_defs, max_ctx);
+
+        for _iteration in 0..MAX_TOOL_ITERATIONS {
+            let request = LlmRequest {
+                model: String::new(),
+                messages: messages.clone(),
+                system: system.clone(),
+                max_tokens: Some(effective_max_tokens),
+                temperature: None,
+                tools: tool_defs.clone(),
+            };
+
+            let response = provider.complete(&request).await?;
+
+            let has_tool_use = response
+                .content
+                .iter()
+                .any(|block| matches!(block, ContentBlock::ToolUse { .. }));
+
+            if !has_tool_use {
+                let final_text = extract_text(&response.content);
+                if let Err(e) = self
+                    .remember_turn(session_id, continuity_key, user_id, user_text, &final_text)
+                    .await
+                {
+                    warn!("failed to store turn in memory: {}", e);
+                }
+                return Ok(final_text);
+            }
+
+            messages.push(ChatMessage {
+                role: ChatRole::Assistant,
+                content: MessagePart::Parts(response.content.clone()),
+            });
+
+            let mut tool_results = Vec::new();
+            for block in &response.content {
+                if let ContentBlock::ToolUse { id, name, input } = block {
+                    let context = crate::tools::ToolContext {
+                        session_id: session_id.to_string(),
+                        user_id: user_id.map(|s| s.to_string()),
+                        is_heartbeat: false,
+                    };
+                    let output = match self.find_tool(name) {
+                        Some(tool) => tool
+                            .execute(&context, input.clone())
+                            .await
+                            .unwrap_or_else(|e| ToolOutput::error(e.to_string())),
+                        None => ToolOutput::error(format!("unknown tool: {}", name)),
+                    };
+                    tool_results.push(ContentBlock::ToolResult {
+                        tool_use_id: id.clone(),
+                        content: output.content,
+                    });
+                }
+            }
+
+            messages.push(ChatMessage {
+                role: ChatRole::User,
+                content: MessagePart::Parts(tool_results),
+            });
+        }
+
+        Err(Error::Agent(format!(
+            "tool loop exceeded maximum of {} iterations",
+            MAX_TOOL_ITERATIONS
+        )))
+    }
+
     #[instrument(skip(self, conversation_history), fields(provider_id, continuity_key = ?continuity_key))]
     async fn process_message_impl(
         &self,

@@ -1,9 +1,10 @@
 use axum::Router;
 use axum::response::Html;
-use axum::routing::get;
+use axum::routing::{get, post};
 use tower_governor::GovernorLayer;
 use tower_governor::governor::GovernorConfigBuilder;
 
+use crate::api;
 use crate::state::SharedState;
 use crate::ws;
 
@@ -44,6 +45,12 @@ pub fn build_router(
         .route("/health", get(health))
         .route("/ws", get(ws::ws_handler))
         .route("/api/status", get(status))
+        .route(
+            "/api/sessions",
+            get(api::list_sessions).post(api::create_session),
+        )
+        .route("/api/sessions/{id}/messages", post(api::send_message))
+        .route("/api/sessions/{id}/history", get(api::session_history))
         .with_state(state)
         .merge(whatsapp_routes)
         .layer(governor_layer)
