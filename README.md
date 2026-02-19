@@ -86,7 +86,7 @@ Rewritten from [OpenClaw](https://github.com/openclaw/openclaw). High-performanc
 - **Daemonization** — `opencrust start --daemon` with PID file and log redirection
 - **WebSocket gateway** — session resume, ping/pong heartbeat, graceful shutdown
 - **Interactive setup** — `opencrust init` wizard guides through provider and API key configuration
-- **Migration tool** — `opencrust migrate openclaw` imports data from OpenClaw
+- **Migration tool** — `opencrust migrate openclaw` imports skills and channel configs from OpenClaw (API keys should be re-entered via `opencrust init`)
 
 ## Getting Started
 

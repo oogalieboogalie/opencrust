@@ -266,15 +266,14 @@ fn import_conversations(source_dir: &Path, report: &mut MigrationReport) {
             }
 
             println!(
-                "  {} conversation: {} ({} turns)",
-                action_word(report.dry_run),
+                "  skipped conversation: {} ({} turns)",
                 path.file_stem().unwrap_or_default().to_string_lossy(),
                 turns.len()
             );
-            report.conversations_imported += 1;
-            // Note: actual memory store insertion would require async runtime;
-            // for now we count what would be imported. Full async import can be
-            // added when the memory store is available in the CLI context.
+            report.conversations_skipped += 1;
+            // Conversation import intentionally skipped — old conversation
+            // history from a different runtime has limited value and would
+            // require re-embedding. Users start fresh with OpenCrust.
         }
     }
 
@@ -455,18 +454,15 @@ fn import_credentials(source_dir: &Path, report: &mut MigrationReport) {
                 .to_string_lossy()
                 .to_string();
 
-            println!(
-                "  {} credential file: {file_name}",
-                action_word(report.dry_run)
-            );
-            report.credentials_imported += 1;
+            println!("  skipped credential file: {file_name}");
+            report.credentials_skipped += 1;
         }
     }
 
     if found_any && !report.dry_run {
         println!(
-            "  Note: credential import requires vault passphrase. \
-             Use `opencrust vault import` to complete credential migration."
+            "  Note: credential migration is skipped — re-enter API keys \
+             via `opencrust init` or set environment variables directly."
         );
     }
 }
