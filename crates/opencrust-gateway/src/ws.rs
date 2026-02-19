@@ -23,6 +23,11 @@ const HEARTBEAT_INTERVAL: Duration = Duration::from_secs(30);
 /// Close the connection if no pong received within 90 seconds.
 const HEARTBEAT_TIMEOUT: Duration = Duration::from_secs(90);
 
+/// Per-WebSocket message rate limit: max messages per sliding window.
+const WS_RATE_LIMIT_MAX: u32 = 30;
+/// Sliding window duration for per-WebSocket rate limiting.
+const WS_RATE_LIMIT_WINDOW: Duration = Duration::from_secs(60);
+
 /// WebSocket upgrade handler.
 pub async fn ws_handler(
     Query(params): Query<HashMap<String, String>>,
@@ -157,6 +162,9 @@ async fn handle_socket(socket: WebSocket, state: SharedState) {
     // Don't send ping immediately
     heartbeat.tick().await;
 
+    // Per-WebSocket sliding window rate limiter
+    let mut msg_timestamps: std::collections::VecDeque<Instant> = std::collections::VecDeque::new();
+
     loop {
         tokio::select! {
             _ = heartbeat.tick() => {
@@ -177,6 +185,22 @@ async fn handle_socket(socket: WebSocket, state: SharedState) {
                         if let Some(mut session) = state.sessions.get_mut(&session_id) {
                             session.last_active = std::time::Instant::now();
                         }
+
+                        // Per-WebSocket sliding window rate limit
+                        let now = Instant::now();
+                        msg_timestamps.retain(|ts| now.duration_since(*ts) < WS_RATE_LIMIT_WINDOW);
+                        if msg_timestamps.len() >= WS_RATE_LIMIT_MAX as usize {
+                            warn!("rate limited: session={}, msgs_in_window={}", session_id, msg_timestamps.len());
+                            let err = serde_json::json!({
+                                "type": "error",
+                                "code": "rate_limited",
+                                "message": "too many messages, please slow down",
+                                "retry_after_secs": WS_RATE_LIMIT_WINDOW.as_secs(),
+                            });
+                            let _ = sender.send(Message::Text(err.to_string().into())).await;
+                            continue;
+                        }
+                        msg_timestamps.push_back(now);
 
                         let text_len = text.len();
                         info!("received message: session={}, len={}", session_id, text_len);

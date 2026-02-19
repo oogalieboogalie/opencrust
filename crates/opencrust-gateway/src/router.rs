@@ -12,10 +12,11 @@ pub fn build_router(
     state: SharedState,
     whatsapp_state: opencrust_channels::whatsapp::webhook::WhatsAppState,
 ) -> Router {
-    // Per-IP rate limit: 60 requests per minute (1 per second average, burst of 60).
+    // Per-IP rate limit from config (default: 1 req/sec, burst 60).
+    let rl = &state.config.gateway.rate_limit;
     let governor_conf = GovernorConfigBuilder::default()
-        .per_second(1)
-        .burst_size(60)
+        .per_second(rl.per_second)
+        .burst_size(rl.burst_size)
         .finish()
         .expect("governor config should be valid");
     let governor_limiter = governor_conf.limiter().clone();

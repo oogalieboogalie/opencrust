@@ -58,6 +58,9 @@ pub struct GatewayConfig {
 
     #[serde(default)]
     pub api_key: Option<String>,
+
+    #[serde(default)]
+    pub rate_limit: RateLimitConfig,
 }
 
 impl Default for GatewayConfig {
@@ -66,8 +69,35 @@ impl Default for GatewayConfig {
             host: default_host(),
             port: default_port(),
             api_key: None,
+            rate_limit: RateLimitConfig::default(),
         }
     }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct RateLimitConfig {
+    #[serde(default = "default_rate_per_second")]
+    pub per_second: u64,
+
+    #[serde(default = "default_rate_burst_size")]
+    pub burst_size: u32,
+}
+
+impl Default for RateLimitConfig {
+    fn default() -> Self {
+        Self {
+            per_second: default_rate_per_second(),
+            burst_size: default_rate_burst_size(),
+        }
+    }
+}
+
+fn default_rate_per_second() -> u64 {
+    1
+}
+
+fn default_rate_burst_size() -> u32 {
+    60
 }
 
 fn default_host() -> String {
