@@ -32,10 +32,18 @@ Rewritten from [OpenClaw](https://github.com/openclaw/openclaw). High-performanc
 | Benefit | What it means for you |
 |---------|----------------------|
 | **Single binary** | `cargo install opencrust` and you're done. No Node.js, no pnpm, no runtime dependencies. |
-| **Low memory** | Runs comfortably on a Raspberry Pi alongside local LLMs. 10-50x less RAM than the Node.js version. |
+| **Low memory** | 30x less RAM than the Node.js version. Runs comfortably on a Raspberry Pi alongside local LLMs. |
 | **Always-on reliability** | Memory safety without garbage collection pauses. If it compiles, it runs. |
-| **Fast startup** | Sub-second cold start vs multi-second Node.js boot. |
+| **Fast startup** | 4,600x faster cold start than the Node.js version. |
 | **Easy cross-compilation** | Build for Linux ARM, x86, macOS from a single machine. |
+
+### Benchmarks (1 vCPU, 1 GB RAM DigitalOcean droplet)
+
+| Metric | OpenClaw (Node.js) | OpenCrust (Rust) | Difference |
+|--------|-------------------|-----------------|------------|
+| Install/binary size | 1.2 GB | 17 MB | 70x smaller |
+| Memory at idle | 388 MB | 13 MB | 30x less |
+| Startup time | 13.9s | 3ms | 4,600x faster |
 
 ## Features
 
