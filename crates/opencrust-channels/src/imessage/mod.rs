@@ -29,6 +29,9 @@ pub type IMessageOnMessageFn = Arc<
         + Sync,
 >;
 
+/// Maximum backoff duration on consecutive poll failures.
+const MAX_BACKOFF: Duration = Duration::from_secs(30);
+
 pub struct IMessageChannel {
     poll_interval: Duration,
     status: ChannelStatus,
@@ -75,9 +78,18 @@ impl Channel for IMessageChannel {
                 poll_interval.as_secs()
             );
 
+            let mut consecutive_failures: u32 = 0;
+
             loop {
+                let sleep_duration = if consecutive_failures == 0 {
+                    poll_interval
+                } else {
+                    let backoff = poll_interval.saturating_mul(1 << consecutive_failures.min(5));
+                    backoff.min(MAX_BACKOFF)
+                };
+
                 tokio::select! {
-                    _ = tokio::time::sleep(poll_interval) => {}
+                    _ = tokio::time::sleep(sleep_duration) => {}
                     _ = shutdown_rx.changed() => {
                         if *shutdown_rx.borrow() {
                             info!("imessage poll loop shutting down");
@@ -86,42 +98,98 @@ impl Channel for IMessageChannel {
                     }
                 }
 
-                let messages = db.poll();
-                for msg in messages {
-                    info!(
-                        "imessage from {} ({} chars, rowid={})",
-                        msg.sender,
-                        msg.text.len(),
-                        msg.rowid
-                    );
+                match db.poll() {
+                    Ok(messages) => {
+                        if consecutive_failures > 0 {
+                            info!(
+                                "imessage: recovered after {consecutive_failures} consecutive failure(s)"
+                            );
+                            consecutive_failures = 0;
+                        }
 
-                    let on_message = Arc::clone(&on_message);
-                    let sender = msg.sender.clone();
-                    let text = msg.text;
+                        for msg in messages {
+                            let is_group = msg.group_name.is_some();
+                            let session_key = if let Some(ref group) = msg.group_name {
+                                format!("imessage-group-{group}")
+                            } else {
+                                format!("imessage-{}", msg.sender)
+                            };
 
-                    tokio::spawn(async move {
-                        // sender_id and sender_name are both the handle (phone/email)
-                        let result = on_message(sender.clone(), sender.clone(), text, None).await;
+                            info!(
+                                "imessage from {} ({} chars, rowid={}{}) session={}",
+                                msg.sender,
+                                msg.text.len(),
+                                msg.rowid,
+                                if is_group {
+                                    format!(", group={}", msg.group_name.as_deref().unwrap_or(""))
+                                } else {
+                                    String::new()
+                                },
+                                session_key,
+                            );
 
-                        match result {
-                            Ok(response) => {
-                                if let Err(e) = sender::send_imessage(&sender, &response).await {
-                                    error!("imessage: failed to send reply to {sender}: {e}");
+                            let on_message = Arc::clone(&on_message);
+                            let sender = msg.sender.clone();
+                            let text = msg.text;
+                            let group_name = msg.group_name.clone();
+
+                            tokio::spawn(async move {
+                                // First arg = session key (group_name for groups, sender for DMs)
+                                // Second arg = actual sender identity (always the person)
+                                let session_key = if let Some(ref group) = group_name {
+                                    group.clone()
+                                } else {
+                                    sender.clone()
+                                };
+
+                                let result =
+                                    on_message(session_key, sender.clone(), text, None).await;
+
+                                match result {
+                                    Ok(response) => {
+                                        let send_result = if let Some(ref group) = group_name {
+                                            sender::send_imessage_group(group, &response).await
+                                        } else {
+                                            sender::send_imessage(&sender, &response).await
+                                        };
+                                        if let Err(e) = send_result {
+                                            error!(
+                                                "imessage: failed to send reply to {}: {e}",
+                                                group_name.as_deref().unwrap_or(&sender)
+                                            );
+                                        }
+                                    }
+                                    Err(e) if e == "__blocked__" => {
+                                        // Silently drop — unauthorized user
+                                    }
+                                    Err(e) => {
+                                        warn!("imessage: agent error for {sender}: {e}");
+                                        let error_msg = format!("Sorry, an error occurred: {e}");
+                                        let send_result = if let Some(ref group) = group_name {
+                                            sender::send_imessage_group(group, &error_msg).await
+                                        } else {
+                                            sender::send_imessage(&sender, &error_msg).await
+                                        };
+                                        let _ = send_result;
+                                    }
                                 }
+                            });
+                        }
+                    }
+                    Err(e) => {
+                        consecutive_failures = consecutive_failures.saturating_add(1);
+                        warn!("imessage: poll failed (attempt {consecutive_failures}): {e}");
+
+                        // Try to reopen the database connection
+                        match db.reopen() {
+                            Ok(()) => {
+                                info!("imessage: reopened chat.db after poll failure");
                             }
-                            Err(e) if e == "__blocked__" => {
-                                // Silently drop — unauthorized user
-                            }
-                            Err(e) => {
-                                warn!("imessage: agent error for {sender}: {e}");
-                                let _ = sender::send_imessage(
-                                    &sender,
-                                    &format!("Sorry, an error occurred: {e}"),
-                                )
-                                .await;
+                            Err(reopen_err) => {
+                                warn!("imessage: failed to reopen chat.db: {reopen_err}");
                             }
                         }
-                    });
+                    }
                 }
             }
 
@@ -184,5 +252,10 @@ mod tests {
         assert_eq!(channel.channel_type(), "imessage");
         assert_eq!(channel.display_name(), "iMessage");
         assert_eq!(channel.status(), ChannelStatus::Disconnected);
+    }
+
+    #[test]
+    fn max_backoff_is_30s() {
+        assert_eq!(MAX_BACKOFF, Duration::from_secs(30));
     }
 }

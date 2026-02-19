@@ -1280,26 +1280,24 @@ pub fn build_imessage_channels(
         let pairing_for_cb = Arc::clone(&pairing);
 
         let on_message: IMessageOnMessageFn = Arc::new(
-            move |sender_id: String,
-                  user_name: String,
+            move |session_key: String,
+                  sender_id: String,
                   text: String,
                   _delta_tx: Option<tokio::sync::mpsc::Sender<String>>| {
                 let state = Arc::clone(&state_for_cb);
                 let allowlist = Arc::clone(&allowlist_for_cb);
                 let pairing = Arc::clone(&pairing_for_cb);
                 Box::pin(async move {
-                    // Allowlist / pairing check
+                    // Allowlist / pairing check (always against the actual sender)
                     {
                         let mut list = allowlist.lock().unwrap();
                         if list.needs_owner() {
                             list.claim_owner(&sender_id);
-                            info!("imessage: auto-paired owner {} ({})", user_name, sender_id);
-                            return Ok(format!(
-                                "Welcome, {}! You are now the owner of this OpenCrust bot.\n\n\
+                            info!("imessage: auto-paired owner {sender_id}");
+                            return Ok("Welcome! You are now the owner of this OpenCrust bot.\n\n\
                                  Send /pair to generate a code for adding other users.\n\
-                                 Send /help for available commands.",
-                                user_name
-                            ));
+                                 Send /help for available commands."
+                                .to_string());
                         }
 
                         if !list.is_allowed(&sender_id) {
@@ -1308,23 +1306,20 @@ pub fn build_imessage_channels(
                                 let claimed = pairing.lock().unwrap().claim(trimmed, &sender_id);
                                 if claimed.is_some() {
                                     list.add(&sender_id);
-                                    info!(
-                                        "imessage: paired user {} ({}) via code",
-                                        user_name, sender_id
+                                    info!("imessage: paired user {sender_id} via code");
+                                    return Ok(
+                                        "Welcome! You now have access to this bot.".to_string()
                                     );
-                                    return Ok(format!(
-                                        "Welcome, {}! You now have access to this bot.",
-                                        user_name
-                                    ));
                                 }
                             }
 
-                            warn!("imessage: unauthorized user {} ({})", user_name, sender_id);
+                            warn!("imessage: unauthorized user {sender_id}");
                             return Err("__blocked__".to_string());
                         }
                     }
 
-                    let session_id = format!("imessage-{sender_id}");
+                    // session_key is group_name for groups, sender handle for DMs
+                    let session_id = format!("imessage-{session_key}");
 
                     let text = opencrust_security::InputValidator::sanitize(&text);
                     if opencrust_security::InputValidator::check_prompt_injection(&text) {

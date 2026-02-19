@@ -33,10 +33,35 @@ end tell"#
     );
 
     debug!("imessage: sending to {to} ({} chars)", text.len());
+    run_osascript(&script).await
+}
 
+/// Send an iMessage to a group chat via Messages.app.
+///
+/// `group_name` is the `cache_roomnames` value from chat.db (e.g. `chat123456789`).
+pub async fn send_imessage_group(group_name: &str, text: &str) -> Result<(), String> {
+    let escaped_group = applescript_escape(group_name);
+    let escaped_text = applescript_escape(text);
+
+    let script = format!(
+        r#"tell application "Messages"
+    set targetChat to chat "{escaped_group}"
+    send "{escaped_text}" to targetChat
+end tell"#
+    );
+
+    debug!(
+        "imessage: sending to group {group_name} ({} chars)",
+        text.len()
+    );
+    run_osascript(&script).await
+}
+
+/// Execute an AppleScript via `osascript` and return the result.
+async fn run_osascript(script: &str) -> Result<(), String> {
     let output = tokio::process::Command::new("osascript")
         .arg("-e")
-        .arg(&script)
+        .arg(script)
         .output()
         .await
         .map_err(|e| format!("failed to spawn osascript: {e}"))?;
