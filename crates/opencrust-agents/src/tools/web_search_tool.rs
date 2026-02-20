@@ -163,7 +163,7 @@ mod tests {
 
     #[test]
     fn formats_results_correctly() {
-        let results = vec![
+        let results = [
             BraveWebResult {
                 title: "Rust Lang".into(),
                 url: "https://www.rust-lang.org".into(),
