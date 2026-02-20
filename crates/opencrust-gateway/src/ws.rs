@@ -73,7 +73,23 @@ async fn handle_socket(socket: WebSocket, state: SharedState) {
     // Wait for the first message to decide: new session or resume.
     let session_id = match tokio::time::timeout(Duration::from_secs(10), receiver.next()).await {
         Ok(Some(Ok(Message::Text(text)))) => {
-            if let Some(resume_id) = try_parse_resume(&text) {
+            if is_init_message(&text) {
+                // Client is requesting a fresh session (no resume)
+                let id = state.create_session();
+                info!("new WebSocket connection (init): session={}", id);
+                let welcome = serde_json::json!({
+                    "type": "connected",
+                    "session_id": id,
+                });
+                if sender
+                    .send(Message::Text(welcome.to_string().into()))
+                    .await
+                    .is_err()
+                {
+                    return;
+                }
+                id
+            } else if let Some(resume_id) = try_parse_resume(&text) {
                 if state.resume_session(&resume_id) {
                     info!("resumed WebSocket session: {}", resume_id);
 
@@ -319,6 +335,13 @@ async fn process_text_message(
 }
 
 /// Try to parse a resume request: `{"type": "resume", "session_id": "..."}`.
+fn is_init_message(raw: &str) -> bool {
+    serde_json::from_str::<serde_json::Value>(raw)
+        .ok()
+        .and_then(|v| v.get("type")?.as_str().map(|s| s == "init"))
+        .unwrap_or(false)
+}
+
 fn try_parse_resume(raw: &str) -> Option<String> {
     let v = serde_json::from_str::<serde_json::Value>(raw).ok()?;
     if v.get("type")?.as_str()? == "resume" {
