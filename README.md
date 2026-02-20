@@ -147,7 +147,7 @@ OpenCrust looks for config at `~/.opencrust/config.yml`:
 ```yaml
 gateway:
   host: "127.0.0.1"
-  port: 3000
+  port: 3888
 
 llm:
   claude:

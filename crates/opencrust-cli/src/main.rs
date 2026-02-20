@@ -34,7 +34,7 @@ enum Commands {
         host: String,
 
         /// Port to listen on
-        #[arg(long, default_value = "3000")]
+        #[arg(long, default_value = "3888")]
         port: u16,
 
         /// Run as a background daemon

@@ -111,7 +111,7 @@ fn default_host() -> String {
 }
 
 fn default_port() -> u16 {
-    3000
+    3888
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -243,7 +243,7 @@ mod tests {
         let raw = r#"
 gateway:
   host: "127.0.0.1"
-  port: 3000
+  port: 3888
 memory:
   enabled: true
   embedding_provider: "cohere-main"

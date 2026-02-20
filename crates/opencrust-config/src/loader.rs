@@ -167,7 +167,7 @@ mod tests {
         let config = loader.load().expect("load should succeed");
 
         assert_eq!(config.gateway.host, "127.0.0.1");
-        assert_eq!(config.gateway.port, 3000);
+        assert_eq!(config.gateway.port, 3888);
         assert!(config.channels.is_empty());
 
         let _ = fs::remove_dir_all(dir);
