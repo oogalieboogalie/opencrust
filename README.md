@@ -114,7 +114,7 @@ OpenCrust is built for the security requirements of always-on AI agents that acc
 - CLI: `opencrust mcp list`, `opencrust mcp inspect <name>`
 
 ### Agent Runtime
-- Tool execution loop — bash, file read/write, web fetch (up to 10 iterations)
+- Tool execution loop — bash, file read/write, web fetch, web search (up to 10 iterations)
 - SQLite-backed conversation memory with vector search (sqlite-vec + Cohere embeddings)
 - Context window management — automatic history trimming
 - Scheduled tasks — cron, interval, and one-shot scheduling
@@ -209,7 +209,7 @@ crates/
 | WhatsApp (webhooks) | Working |
 | iMessage (macOS, group chats) | Working |
 | LLM providers (Anthropic, OpenAI, Ollama, Sansa) | Working |
-| Agent tools (bash, file_read, file_write, web_fetch) | Working |
+| Agent tools (bash, file_read, file_write, web_fetch, web_search) | Working |
 | MCP client (stdio, tool bridging) | Working |
 | Skills (SKILL.md, auto-discovery) | Working |
 | Config (YAML/TOML, hot-reload) | Working |
