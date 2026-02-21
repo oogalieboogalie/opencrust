@@ -185,6 +185,201 @@ pub fn build_agent_runtime(config: &AppConfig) -> AgentRuntime {
                     );
                 }
             }
+            "gemini" => {
+                let api_key = resolve_api_key(
+                    llm_config.api_key.as_deref(),
+                    "GEMINI_API_KEY",
+                    "GEMINI_API_KEY",
+                );
+
+                if let Some(key) = api_key {
+                    let base_url = llm_config.base_url.clone().or_else(|| {
+                        Some("https://generativelanguage.googleapis.com/v1beta/openai/".to_string())
+                    });
+                    let model = llm_config
+                        .model
+                        .clone()
+                        .or_else(|| Some("gemini-2.5-flash".to_string()));
+                    let provider = OpenAiProvider::new(key, model, base_url).with_name("gemini");
+                    runtime.register_provider(Arc::new(provider));
+                    info!("configured gemini provider: {name}");
+                } else {
+                    warn!(
+                        "skipping gemini provider {name}: no API key (set api_key in config or GEMINI_API_KEY env var)"
+                    );
+                }
+            }
+            "falcon" => {
+                let api_key = resolve_api_key(
+                    llm_config.api_key.as_deref(),
+                    "FALCON_API_KEY",
+                    "FALCON_API_KEY",
+                );
+
+                if let Some(key) = api_key {
+                    let base_url = llm_config
+                        .base_url
+                        .clone()
+                        .or_else(|| Some("https://api.ai71.ai/v1".to_string()));
+                    let model = llm_config
+                        .model
+                        .clone()
+                        .or_else(|| Some("tiiuae/falcon-180b-chat".to_string()));
+                    let provider = OpenAiProvider::new(key, model, base_url).with_name("falcon");
+                    runtime.register_provider(Arc::new(provider));
+                    info!("configured falcon provider: {name}");
+                } else {
+                    warn!(
+                        "skipping falcon provider {name}: no API key (set api_key in config or FALCON_API_KEY env var)"
+                    );
+                }
+            }
+            "jais" => {
+                let api_key = resolve_api_key(
+                    llm_config.api_key.as_deref(),
+                    "JAIS_API_KEY",
+                    "JAIS_API_KEY",
+                );
+
+                if let Some(key) = api_key {
+                    let base_url = llm_config
+                        .base_url
+                        .clone()
+                        .or_else(|| Some("https://api.core42.ai/v1".to_string()));
+                    let model = llm_config
+                        .model
+                        .clone()
+                        .or_else(|| Some("jais-adapted-70b-chat".to_string()));
+                    let provider = OpenAiProvider::new(key, model, base_url).with_name("jais");
+                    runtime.register_provider(Arc::new(provider));
+                    info!("configured jais provider: {name}");
+                } else {
+                    warn!(
+                        "skipping jais provider {name}: no API key (set api_key in config or JAIS_API_KEY env var)"
+                    );
+                }
+            }
+            "qwen" => {
+                let api_key = resolve_api_key(
+                    llm_config.api_key.as_deref(),
+                    "QWEN_API_KEY",
+                    "QWEN_API_KEY",
+                );
+
+                if let Some(key) = api_key {
+                    let base_url = llm_config.base_url.clone().or_else(|| {
+                        Some("https://dashscope-intl.aliyuncs.com/compatible-mode/v1".to_string())
+                    });
+                    let model = llm_config
+                        .model
+                        .clone()
+                        .or_else(|| Some("qwen-plus".to_string()));
+                    let provider = OpenAiProvider::new(key, model, base_url).with_name("qwen");
+                    runtime.register_provider(Arc::new(provider));
+                    info!("configured qwen provider: {name}");
+                } else {
+                    warn!(
+                        "skipping qwen provider {name}: no API key (set api_key in config or QWEN_API_KEY env var)"
+                    );
+                }
+            }
+            "yi" => {
+                let api_key =
+                    resolve_api_key(llm_config.api_key.as_deref(), "YI_API_KEY", "YI_API_KEY");
+
+                if let Some(key) = api_key {
+                    let base_url = llm_config
+                        .base_url
+                        .clone()
+                        .or_else(|| Some("https://api.lingyiwanwu.com/v1".to_string()));
+                    let model = llm_config
+                        .model
+                        .clone()
+                        .or_else(|| Some("yi-large".to_string()));
+                    let provider = OpenAiProvider::new(key, model, base_url).with_name("yi");
+                    runtime.register_provider(Arc::new(provider));
+                    info!("configured yi provider: {name}");
+                } else {
+                    warn!(
+                        "skipping yi provider {name}: no API key (set api_key in config or YI_API_KEY env var)"
+                    );
+                }
+            }
+            "cohere" => {
+                let api_key = resolve_api_key(
+                    llm_config.api_key.as_deref(),
+                    "COHERE_API_KEY",
+                    "COHERE_API_KEY",
+                );
+
+                if let Some(key) = api_key {
+                    let base_url = llm_config
+                        .base_url
+                        .clone()
+                        .or_else(|| Some("https://api.cohere.com/compatibility/v1".to_string()));
+                    let model = llm_config
+                        .model
+                        .clone()
+                        .or_else(|| Some("command-r-plus".to_string()));
+                    let provider = OpenAiProvider::new(key, model, base_url).with_name("cohere");
+                    runtime.register_provider(Arc::new(provider));
+                    info!("configured cohere provider: {name}");
+                } else {
+                    warn!(
+                        "skipping cohere provider {name}: no API key (set api_key in config or COHERE_API_KEY env var)"
+                    );
+                }
+            }
+            "minimax" => {
+                let api_key = resolve_api_key(
+                    llm_config.api_key.as_deref(),
+                    "MINIMAX_API_KEY",
+                    "MINIMAX_API_KEY",
+                );
+
+                if let Some(key) = api_key {
+                    let base_url = llm_config
+                        .base_url
+                        .clone()
+                        .or_else(|| Some("https://api.minimaxi.chat/v1".to_string()));
+                    let model = llm_config
+                        .model
+                        .clone()
+                        .or_else(|| Some("MiniMax-Text-01".to_string()));
+                    let provider = OpenAiProvider::new(key, model, base_url).with_name("minimax");
+                    runtime.register_provider(Arc::new(provider));
+                    info!("configured minimax provider: {name}");
+                } else {
+                    warn!(
+                        "skipping minimax provider {name}: no API key (set api_key in config or MINIMAX_API_KEY env var)"
+                    );
+                }
+            }
+            "moonshot" => {
+                let api_key = resolve_api_key(
+                    llm_config.api_key.as_deref(),
+                    "MOONSHOT_API_KEY",
+                    "MOONSHOT_API_KEY",
+                );
+
+                if let Some(key) = api_key {
+                    let base_url = llm_config
+                        .base_url
+                        .clone()
+                        .or_else(|| Some("https://api.moonshot.cn/v1".to_string()));
+                    let model = llm_config
+                        .model
+                        .clone()
+                        .or_else(|| Some("kimi-k2-0711-preview".to_string()));
+                    let provider = OpenAiProvider::new(key, model, base_url).with_name("moonshot");
+                    runtime.register_provider(Arc::new(provider));
+                    info!("configured moonshot provider: {name}");
+                } else {
+                    warn!(
+                        "skipping moonshot provider {name}: no API key (set api_key in config or MOONSHOT_API_KEY env var)"
+                    );
+                }
+            }
             other => {
                 warn!("unknown LLM provider type: {other}, skipping {name}");
             }
