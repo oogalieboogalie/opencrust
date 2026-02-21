@@ -20,7 +20,7 @@ A single 17 MB binary that runs your AI agents across Telegram, Discord, Slack, 
 | **Session orchestration** | Planned (#108) | Yes | No |
 | **MCP support** | Stdio | Stdio + HTTP | Stdio |
 | **Channels** | 5 | 6+ | 4 |
-| **LLM providers** | 4 | 10+ | 22+ |
+| **LLM providers** | 14 | 10+ | 22+ |
 | **Pre-compiled binaries** | Yes | N/A (Node.js) | Build from source |
 | **Config hot-reload** | Yes | No | No |
 | **WASM plugin system** | Yes (sandboxed) | No | No |
@@ -29,12 +29,12 @@ A single 17 MB binary that runs your AI agents across Telegram, Discord, Slack, 
 
 ## Features
 
-- **LLM Providers**: Anthropic Claude, OpenAI, Ollama, Sansa.
+- **LLM Providers**: 14 providers - Anthropic Claude, OpenAI, Ollama, and 11 OpenAI-compatible (Sansa, DeepSeek, Mistral, Gemini, Falcon, Jais, Qwen, Yi, Cohere, MiniMax, Moonshot).
 - **Channels**: Telegram, Discord, Slack, WhatsApp, iMessage.
-- **MCP**: Connect any MCP-compatible server.
-- **Agent Runtime**: Tool execution, memory with vector search, scheduled tasks.
+- **MCP**: Connect any MCP-compatible server for external tools.
+- **Agent Runtime**: 6 built-in tools (bash, file_read, file_write, web_fetch, web_search, schedule_heartbeat), memory with vector search, scheduled tasks.
 - **Skills**: Define skills as Markdown files.
-- **Infrastructure**: Config hot-reload, daemonization, migration tools.
+- **Infrastructure**: Config hot-reload, daemonization, self-update, migration tools.
 
 ## Documentation Structure
 
@@ -42,5 +42,7 @@ A single 17 MB binary that runs your AI agents across Telegram, Discord, Slack, 
 - **[Architecture](./architecture.md)**: Understand the internal design.
 - **[Channels](./channels.md)**: Configure communication channels.
 - **[Providers](./providers.md)**: Set up LLM providers.
+- **[Tools](./tools.md)**: Built-in agent tools reference.
+- **[MCP](./mcp.md)**: Connect external tools via Model Context Protocol.
 - **[Security](./security.md)**: Learn about security features.
 - **[Plugins](./plugins.md)**: Extend functionality with WASM plugins.

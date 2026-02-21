@@ -78,7 +78,7 @@ Pre-compiled binaries for Linux (x86_64, aarch64), macOS (Intel, Apple Silicon),
 | **Session orchestration** | Planned (#108) | Yes | No |
 | **MCP support** | Stdio | Stdio + HTTP | Stdio |
 | **Channels** | 5 | 6+ | 4 |
-| **LLM providers** | 4 | 10+ | 22+ |
+| **LLM providers** | 14 | 10+ | 22+ |
 | **Pre-compiled binaries** | Yes | N/A (Node.js) | Build from source |
 | **Config hot-reload** | Yes | No | No |
 | **WASM plugin system** | Optional (sandboxed) | No | No |
@@ -100,10 +100,26 @@ OpenCrust is built for the security requirements of always-on AI agents that acc
 ## Features
 
 ### LLM Providers
+
+**Native providers:**
+
 - **Anthropic Claude** - streaming (SSE), tool use
-- **OpenAI / compatible APIs** - GPT-4o, Azure, any OpenAI-compatible endpoint via `base_url`
+- **OpenAI** - GPT-4o, Azure, any OpenAI-compatible endpoint via `base_url`
 - **Ollama** - local models with streaming
+
+**OpenAI-compatible providers:**
+
 - **Sansa** - regional LLM via [sansaml.com](https://sansaml.com)
+- **DeepSeek** - DeepSeek Chat
+- **Mistral** - Mistral Large
+- **Gemini** - Google Gemini via OpenAI-compatible API
+- **Falcon** - TII Falcon 180B (AI71)
+- **Jais** - Core42 Jais 70B
+- **Qwen** - Alibaba Qwen Plus
+- **Yi** - 01.AI Yi Large
+- **Cohere** - Command R Plus
+- **MiniMax** - MiniMax Text 01
+- **Moonshot** - Kimi K2
 
 ### Channels
 - **Telegram** - streaming responses, MarkdownV2, bot commands, typing indicators, user allowlist with pairing codes
@@ -119,7 +135,7 @@ OpenCrust is built for the security requirements of always-on AI agents that acc
 - CLI: `opencrust mcp list`, `opencrust mcp inspect <name>`
 
 ### Agent Runtime
-- Tool execution loop - bash, file read/write, web fetch, web search (up to 10 iterations)
+- Tool execution loop - bash, file_read, file_write, web_fetch, web_search, schedule_heartbeat (up to 10 iterations)
 - SQLite-backed conversation memory with vector search (sqlite-vec + Cohere embeddings)
 - Context window management - automatic history trimming
 - Scheduled tasks - cron, interval, and one-shot scheduling
@@ -216,8 +232,8 @@ crates/
 | Slack (Socket Mode, streaming) | Working |
 | WhatsApp (webhooks) | Working |
 | iMessage (macOS, group chats) | Working |
-| LLM providers (Anthropic, OpenAI, Ollama, Sansa) | Working |
-| Agent tools (bash, file_read, file_write, web_fetch, web_search) | Working |
+| LLM providers (14: Anthropic, OpenAI, Ollama + 11 OpenAI-compatible) | Working |
+| Agent tools (bash, file_read, file_write, web_fetch, web_search, schedule_heartbeat) | Working |
 | MCP client (stdio, tool bridging) | Working |
 | Skills (SKILL.md, auto-discovery) | Working |
 | Config (YAML/TOML, hot-reload) | Working |

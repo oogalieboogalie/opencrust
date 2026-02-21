@@ -7,6 +7,8 @@
 - [Channels](./channels.md)
   - [iMessage Setup](./channels/imessage.md)
 - [Providers](./providers.md)
+- [Tools](./tools.md)
+- [MCP](./mcp.md)
 - [Security](./security.md)
   - [Architecture](./security/architecture.md)
   - [Attack Surfaces](./security/attack-surfaces.md)
