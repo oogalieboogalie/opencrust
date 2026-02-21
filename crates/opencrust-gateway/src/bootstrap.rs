@@ -135,6 +135,56 @@ pub fn build_agent_runtime(config: &AppConfig) -> AgentRuntime {
                     );
                 }
             }
+            "deepseek" => {
+                let api_key = resolve_api_key(
+                    llm_config.api_key.as_deref(),
+                    "DEEPSEEK_API_KEY",
+                    "DEEPSEEK_API_KEY",
+                );
+
+                if let Some(key) = api_key {
+                    let base_url = llm_config
+                        .base_url
+                        .clone()
+                        .or_else(|| Some("https://api.deepseek.com".to_string()));
+                    let model = llm_config
+                        .model
+                        .clone()
+                        .or_else(|| Some("deepseek-chat".to_string()));
+                    let provider = OpenAiProvider::new(key, model, base_url).with_name("deepseek");
+                    runtime.register_provider(Arc::new(provider));
+                    info!("configured deepseek provider: {name}");
+                } else {
+                    warn!(
+                        "skipping deepseek provider {name}: no API key (set api_key in config or DEEPSEEK_API_KEY env var)"
+                    );
+                }
+            }
+            "mistral" => {
+                let api_key = resolve_api_key(
+                    llm_config.api_key.as_deref(),
+                    "MISTRAL_API_KEY",
+                    "MISTRAL_API_KEY",
+                );
+
+                if let Some(key) = api_key {
+                    let base_url = llm_config
+                        .base_url
+                        .clone()
+                        .or_else(|| Some("https://api.mistral.ai".to_string()));
+                    let model = llm_config
+                        .model
+                        .clone()
+                        .or_else(|| Some("mistral-large-latest".to_string()));
+                    let provider = OpenAiProvider::new(key, model, base_url).with_name("mistral");
+                    runtime.register_provider(Arc::new(provider));
+                    info!("configured mistral provider: {name}");
+                } else {
+                    warn!(
+                        "skipping mistral provider {name}: no API key (set api_key in config or MISTRAL_API_KEY env var)"
+                    );
+                }
+            }
             other => {
                 warn!("unknown LLM provider type: {other}, skipping {name}");
             }

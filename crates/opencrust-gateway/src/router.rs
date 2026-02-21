@@ -134,6 +134,8 @@ async fn auth_check(
 const KNOWN_PROVIDERS: &[(&str, &str, bool)] = &[
     ("anthropic", "Anthropic", true),
     ("openai", "OpenAI", true),
+    ("deepseek", "DeepSeek", true),
+    ("mistral", "Mistral", true),
     ("sansa", "Sansa", true),
     ("ollama", "Ollama", false),
 ];
@@ -285,6 +287,52 @@ async fn add_provider(
                 .with_name("sansa");
             state.agents.register_provider(Arc::new(provider));
             persist_api_key("SANSA_API_KEY", key);
+        }
+        "deepseek" => {
+            let Some(key) = &body.api_key else {
+                return (
+                    axum::http::StatusCode::BAD_REQUEST,
+                    axum::Json(serde_json::json!({
+                        "status": "error",
+                        "message": "api_key is required for deepseek",
+                    })),
+                );
+            };
+            let base_url = body
+                .base_url
+                .clone()
+                .or_else(|| Some("https://api.deepseek.com".to_string()));
+            let model = body
+                .model
+                .clone()
+                .or_else(|| Some("deepseek-chat".to_string()));
+            let provider = opencrust_agents::OpenAiProvider::new(key.clone(), model, base_url)
+                .with_name("deepseek");
+            state.agents.register_provider(Arc::new(provider));
+            persist_api_key("DEEPSEEK_API_KEY", key);
+        }
+        "mistral" => {
+            let Some(key) = &body.api_key else {
+                return (
+                    axum::http::StatusCode::BAD_REQUEST,
+                    axum::Json(serde_json::json!({
+                        "status": "error",
+                        "message": "api_key is required for mistral",
+                    })),
+                );
+            };
+            let base_url = body
+                .base_url
+                .clone()
+                .or_else(|| Some("https://api.mistral.ai".to_string()));
+            let model = body
+                .model
+                .clone()
+                .or_else(|| Some("mistral-large-latest".to_string()));
+            let provider = opencrust_agents::OpenAiProvider::new(key.clone(), model, base_url)
+                .with_name("mistral");
+            state.agents.register_provider(Arc::new(provider));
+            persist_api_key("MISTRAL_API_KEY", key);
         }
         "ollama" => {
             let provider =
