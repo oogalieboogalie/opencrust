@@ -12,9 +12,10 @@ export function createGoogleIntegrationController({
   onSystemMessage,
   onErrorMessage,
 }) {
-  const fallbackRedirectUri = `${window.location.origin}/api/integrations/google/callback`;
+  const canonicalLocalHost = window.location.hostname === "localhost" ? "localhost" : "127.0.0.1";
+  const fallbackRedirectUri = `http://${canonicalLocalHost}:3000/api/integrations/google/callback`;
   let expectedRedirectUri = fallbackRedirectUri;
-  let expectedOrigin = window.location.origin;
+  let expectedOrigin = `http://${canonicalLocalHost}:3000`;
   let connected = false;
   let loading = false;
   let authConfigured = false;

@@ -30,6 +30,8 @@ pub struct AppState {
     /// MCP manager wrapped in Arc for health monitoring.
     pub mcp_manager_arc: Option<Arc<opencrust_agents::McpManager>>,
     pub session_store: Option<Arc<Mutex<SessionStore>>>,
+    /// Per-session rolling summary string used by long-context agent flows.
+    session_summaries: DashMap<String, String>,
     /// Runtime connection state for Google Workspace integration.
     google_workspace_integration_connected: AtomicBool,
     /// Connected Google account email (if known).
@@ -74,6 +76,7 @@ impl AppState {
             mcp_manager: None,
             mcp_manager_arc: None,
             session_store: None,
+            session_summaries: DashMap::new(),
             google_workspace_integration_connected: AtomicBool::new(false),
             google_workspace_email: RwLock::new(None),
             google_oauth_states: DashMap::new(),
@@ -174,6 +177,7 @@ impl AppState {
     /// where the external chat ID determines the session key).
     pub fn create_session_with_id(&self, id: String) {
         let now = Instant::now();
+        self.session_summaries.remove(&id);
         self.sessions.insert(
             id.clone(),
             SessionState {
@@ -204,6 +208,23 @@ impl AppState {
             .get(session_id)
             .map(|s| s.history.clone())
             .unwrap_or_default()
+    }
+
+    /// Return the latest in-memory summary for a session, if any.
+    pub fn session_summary(&self, session_id: &str) -> Option<String> {
+        self.session_summaries
+            .get(session_id)
+            .map(|summary| summary.clone())
+    }
+
+    /// Update the in-memory summary for a session.
+    pub fn update_session_summary(&self, session_id: &str, summary: &str) {
+        if summary.trim().is_empty() {
+            self.session_summaries.remove(session_id);
+            return;
+        }
+        self.session_summaries
+            .insert(session_id.to_string(), summary.to_string());
     }
 
     /// Ensure a session is present in memory and hydrate recent history from persistent storage.
@@ -384,6 +405,10 @@ impl AppState {
                 true
             }
         });
+
+        // Keep summaries in sync with active sessions.
+        self.session_summaries
+            .retain(|session_id, _| self.sessions.contains_key(session_id));
 
         if removed > 0 {
             info!("cleaned up {removed} expired sessions");

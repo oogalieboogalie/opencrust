@@ -5,6 +5,7 @@ use axum::Router;
 use axum::extract::Query;
 use axum::response::{Html, IntoResponse, Redirect};
 use axum::routing::{get, post};
+use opencrust_security::credentials::vault_passphrase_available;
 use tower_governor::GovernorLayer;
 use tower_governor::governor::GovernorConfigBuilder;
 use tower_http::services::ServeDir;
@@ -172,7 +173,7 @@ async fn get_vault_status() -> axum::Json<serde_json::Value> {
         .unwrap_or(false);
     let unlocked = vault_path
         .as_ref()
-        .map(|path| opencrust_security::vault_passphrase_available(path))
+        .map(|path| vault_passphrase_available(path))
         .unwrap_or(false);
 
     axum::Json(serde_json::json!({
@@ -304,7 +305,7 @@ fn google_authorize_url(state: &SharedState) -> Result<String, String> {
     }
 
     if !is_valid_redirect_uri(&oauth.redirect_uri) {
-        return Err("Configured redirect URI is invalid. Use an absolute URL like http://127.0.0.1:3888/api/integrations/google/callback".to_string());
+        return Err("Configured redirect URI is invalid. Use an absolute URL like http://127.0.0.1:3000/api/integrations/google/callback".to_string());
     }
 
     let effective_redirect_uri = effective_google_redirect_uri(state, &oauth.redirect_uri);
@@ -349,27 +350,9 @@ fn redirect_origin(value: &str) -> Option<String> {
     })
 }
 
-fn is_loopback_host(host: &str) -> bool {
-    matches!(host, "127.0.0.1" | "localhost" | "::1")
-}
-
 fn effective_google_redirect_uri(state: &SharedState, configured_redirect_uri: &str) -> String {
     let configured = configured_redirect_uri.trim();
     if configured.is_empty() {
-        return default_google_redirect_uri(state);
-    }
-
-    let Ok(parsed) = url::Url::parse(configured) else {
-        return configured.to_string();
-    };
-
-    let Some(host) = parsed.host_str() else {
-        return configured.to_string();
-    };
-
-    // If redirect points to loopback but a different local port than this gateway,
-    // force callback to this gateway's active local port to avoid connection-refused loops.
-    if is_loopback_host(host) && parsed.port_or_known_default() != Some(state.config.gateway.port) {
         return default_google_redirect_uri(state);
     }
 
@@ -734,7 +717,7 @@ async fn set_google_integration_config(
             axum::http::StatusCode::BAD_REQUEST,
             axum::Json(serde_json::json!({
                 "status": "error",
-                "message": "Invalid redirect_uri. Use an absolute URL like http://127.0.0.1:3888/api/integrations/google/callback",
+                "message": "Invalid redirect_uri. Use an absolute URL like http://127.0.0.1:3000/api/integrations/google/callback",
             })),
         );
     }
@@ -1289,12 +1272,11 @@ fn google_refresh_token_available() -> bool {
 }
 
 fn default_google_redirect_uri(state: &SharedState) -> String {
-    let host = state.config.gateway.host.trim();
-    let host = if host.is_empty() { "127.0.0.1" } else { host };
-    format!(
-        "http://{}:{}/api/integrations/google/callback",
-        host, state.config.gateway.port
-    )
+    let host = match state.config.gateway.host.trim() {
+        "localhost" => "localhost",
+        _ => "127.0.0.1",
+    };
+    format!("http://{host}:3000/api/integrations/google/callback")
 }
 
 fn mask_client_id(client_id: &str) -> String {
