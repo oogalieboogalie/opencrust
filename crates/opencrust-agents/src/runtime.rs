@@ -25,7 +25,7 @@ pub struct AgentRuntime {
     embeddings: Option<Arc<dyn EmbeddingProvider>>,
     tools: Vec<Box<dyn Tool>>,
     system_prompt: Option<String>,
-    soul_content: RwLock<Option<String>>,
+    dna_content: RwLock<Option<String>>,
     max_tokens: Option<u32>,
     max_context_tokens: Option<usize>,
     recall_limit: usize,
@@ -41,7 +41,7 @@ impl AgentRuntime {
             embeddings: None,
             tools: Vec::new(),
             system_prompt: None,
-            soul_content: RwLock::new(None),
+            dna_content: RwLock::new(None),
             max_tokens: None,
             max_context_tokens: None,
             recall_limit: 10,
@@ -57,15 +57,15 @@ impl AgentRuntime {
         self.system_prompt = Some(prompt);
     }
 
-    /// Set the soul content (personality/tone from soul.md). Uses `&self` via RwLock
+    /// Set the DNA content (personality/tone from dna.md). Uses `&self` via RwLock
     /// so it works after Arc wrapping for hot-reload.
-    pub fn set_soul_content(&self, content: Option<String>) {
-        *self.soul_content.write().unwrap() = content;
+    pub fn set_dna_content(&self, content: Option<String>) {
+        *self.dna_content.write().unwrap() = content;
     }
 
-    /// Get a clone of the current soul content.
-    pub fn soul_content(&self) -> Option<String> {
-        self.soul_content.read().unwrap().clone()
+    /// Get a clone of the current DNA content.
+    pub fn dna_content(&self) -> Option<String> {
+        self.dna_content.read().unwrap().clone()
     }
 
     pub fn set_max_tokens(&mut self, max_tokens: u32) {
@@ -513,9 +513,9 @@ impl AgentRuntime {
             _ => None,
         };
 
-        let soul = self.soul_content();
+        let dna = self.dna_content();
         let system = build_system_prompt(
-            soul.as_deref(),
+            dna.as_deref(),
             &effective_system_prompt,
             memory_context.as_deref(),
             None,
@@ -655,9 +655,9 @@ impl AgentRuntime {
             _ => None,
         };
 
-        let soul = self.soul_content();
+        let dna = self.dna_content();
         let system = build_system_prompt(
-            soul.as_deref(),
+            dna.as_deref(),
             &effective_system_prompt,
             memory_context.as_deref(),
             session_summary,
@@ -685,7 +685,7 @@ impl AgentRuntime {
 
         let system = if new_summary.is_some() {
             build_system_prompt(
-                soul.as_deref(),
+                dna.as_deref(),
                 &effective_system_prompt,
                 memory_context.as_deref(),
                 new_summary.as_deref(),
@@ -801,9 +801,9 @@ impl AgentRuntime {
             _ => None,
         };
 
-        let soul = self.soul_content();
+        let dna = self.dna_content();
         let system = build_system_prompt(
-            soul.as_deref(),
+            dna.as_deref(),
             &self.system_prompt,
             memory_context.as_deref(),
             None,
@@ -1006,9 +1006,9 @@ impl AgentRuntime {
             _ => None,
         };
 
-        let soul = self.soul_content();
+        let dna = self.dna_content();
         let system = build_system_prompt(
-            soul.as_deref(),
+            dna.as_deref(),
             &self.system_prompt,
             memory_context.as_deref(),
             None,
@@ -1265,9 +1265,9 @@ impl AgentRuntime {
             _ => None,
         };
 
-        let soul = self.soul_content();
+        let dna = self.dna_content();
         let system = build_system_prompt(
-            soul.as_deref(),
+            dna.as_deref(),
             &self.system_prompt,
             memory_context.as_deref(),
             session_summary,
@@ -1296,7 +1296,7 @@ impl AgentRuntime {
         // If we got a new summary, rebuild system prompt with it
         let system = if new_summary.is_some() {
             build_system_prompt(
-                soul.as_deref(),
+                dna.as_deref(),
                 &self.system_prompt,
                 memory_context.as_deref(),
                 new_summary.as_deref(),
@@ -1421,9 +1421,9 @@ impl AgentRuntime {
             _ => None,
         };
 
-        let soul = self.soul_content();
+        let dna = self.dna_content();
         let system = build_system_prompt(
-            soul.as_deref(),
+            dna.as_deref(),
             &self.system_prompt,
             memory_context.as_deref(),
             session_summary,
@@ -1451,7 +1451,7 @@ impl AgentRuntime {
 
         let system = if new_summary.is_some() {
             build_system_prompt(
-                soul.as_deref(),
+                dna.as_deref(),
                 &self.system_prompt,
                 memory_context.as_deref(),
                 new_summary.as_deref(),
@@ -1880,17 +1880,36 @@ async fn compact_messages(
     }
 }
 
-/// Build the system prompt by combining soul content, system prompt, memory context,
-/// and conversation summary.
+/// The bootstrap instruction injected when no dna.md exists yet.
+/// The agent will ask the user a few questions and write dna.md itself.
+const BOOTSTRAP_INSTRUCTION: &str = "\
+You haven't been personalized yet. Before responding to the user's first message, \
+briefly introduce yourself and ask them:
+1. What should I call you?
+2. How do you prefer I communicate - casual, professional, or something else?
+3. Any specific guidelines or things to avoid?
+
+Keep it conversational and brief - 2-3 sentences max to ask. Once they answer, \
+use the file_write tool to create ~/.opencrust/dna.md with a markdown document \
+capturing their preferences. Then continue helping with whatever they originally asked.
+
+If the user ignores the questions or says to skip, write a minimal dna.md with \
+sensible defaults and move on.";
+
+/// Build the system prompt by combining DNA content, system prompt, memory context,
+/// and conversation summary. When no DNA content exists, a bootstrap instruction is
+/// injected so the agent can collect user preferences on first interaction.
 fn build_system_prompt(
-    soul_content: Option<&str>,
+    dna_content: Option<&str>,
     system_prompt: &Option<String>,
     memory_context: Option<&str>,
     session_summary: Option<&str>,
 ) -> Option<String> {
     let mut parts = Vec::new();
-    if let Some(soul) = soul_content {
-        parts.push(soul.to_string());
+    if let Some(dna) = dna_content {
+        parts.push(dna.to_string());
+    } else {
+        parts.push(BOOTSTRAP_INSTRUCTION.to_string());
     }
     if let Some(prompt) = system_prompt {
         parts.push(prompt.clone());
@@ -1901,11 +1920,7 @@ fn build_system_prompt(
     if let Some(summary) = session_summary {
         parts.push(format!("Conversation summary:\n{summary}"));
     }
-    if parts.is_empty() {
-        None
-    } else {
-        Some(parts.join("\n\n"))
-    }
+    Some(parts.join("\n\n"))
 }
 
 fn extract_text(content: &[ContentBlock]) -> String {
@@ -1945,8 +1960,9 @@ mod tests {
     #[test]
     fn build_system_prompt_no_summary() {
         let sys = Some("You are helpful.".to_string());
-        let result = build_system_prompt(None, &sys, None, None).unwrap();
-        assert_eq!(result, "You are helpful.");
+        let result = build_system_prompt(Some("Be kind."), &sys, None, None).unwrap();
+        assert!(result.contains("You are helpful."));
+        assert!(result.contains("Be kind."));
         assert!(!result.contains("Conversation summary:"));
     }
 
@@ -1958,35 +1974,44 @@ mod tests {
     }
 
     #[test]
-    fn build_system_prompt_none_when_all_empty() {
-        assert!(build_system_prompt(None, &None, None, None).is_none());
+    fn build_system_prompt_bootstrap_when_all_empty() {
+        // When no DNA content is provided, bootstrap instruction is injected
+        let result = build_system_prompt(None, &None, None, None).unwrap();
+        assert!(result.contains("personalized"));
     }
 
     #[test]
-    fn build_system_prompt_with_soul_content() {
-        let soul = Some("You are a pirate. Always say arrr.");
+    fn build_system_prompt_with_dna_content() {
+        let dna = Some("You are a pirate. Always say arrr.");
         let sys = Some("You are helpful.".to_string());
-        let result = build_system_prompt(soul, &sys, None, None).unwrap();
-        // Soul should come before system prompt
-        let soul_pos = result.find("pirate").unwrap();
+        let result = build_system_prompt(dna, &sys, None, None).unwrap();
+        // DNA should come before system prompt
+        let dna_pos = result.find("pirate").unwrap();
         let sys_pos = result.find("helpful").unwrap();
-        assert!(soul_pos < sys_pos);
+        assert!(dna_pos < sys_pos);
     }
 
     #[test]
-    fn build_system_prompt_soul_only() {
+    fn build_system_prompt_dna_only() {
         let result = build_system_prompt(Some("You are a pirate."), &None, None, None).unwrap();
         assert_eq!(result, "You are a pirate.");
     }
 
     #[test]
-    fn soul_content_set_and_get() {
+    fn build_system_prompt_bootstrap_when_no_dna() {
+        let result = build_system_prompt(None, &None, None, None).unwrap();
+        assert!(result.contains("personalized"));
+        assert!(result.contains("dna.md"));
+    }
+
+    #[test]
+    fn dna_content_set_and_get() {
         let runtime = AgentRuntime::new();
-        assert!(runtime.soul_content().is_none());
-        runtime.set_soul_content(Some("Be friendly.".to_string()));
-        assert_eq!(runtime.soul_content().unwrap(), "Be friendly.");
-        runtime.set_soul_content(None);
-        assert!(runtime.soul_content().is_none());
+        assert!(runtime.dna_content().is_none());
+        runtime.set_dna_content(Some("Be friendly.".to_string()));
+        assert_eq!(runtime.dna_content().unwrap(), "Be friendly.");
+        runtime.set_dna_content(None);
+        assert!(runtime.dna_content().is_none());
     }
 
     #[test]

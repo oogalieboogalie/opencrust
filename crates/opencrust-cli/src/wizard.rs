@@ -431,194 +431,6 @@ async fn section_provider(
 }
 
 // ---------------------------------------------------------------------------
-// Section: System Prompt
-// ---------------------------------------------------------------------------
-
-fn section_system_prompt(existing: &Option<AppConfig>) -> Result<Option<String>> {
-    println!();
-    println!("  --- System Prompt ---");
-
-    let existing_prompt = existing
-        .as_ref()
-        .and_then(|c| c.agent.system_prompt.clone());
-
-    if let Some(ref prompt) = existing_prompt {
-        let display = if prompt.len() > 60 {
-            format!("{}...", &prompt[..57])
-        } else {
-            prompt.clone()
-        };
-        println!("  Current: {display}");
-
-        let choices = &["Keep current", "Change"];
-        let sel = Select::new()
-            .with_prompt("System prompt")
-            .items(choices)
-            .default(0)
-            .interact()
-            .context("selection cancelled")?;
-        if sel == 0 {
-            return Ok(None);
-        }
-    }
-
-    let default =
-        existing_prompt.unwrap_or_else(|| "You are a helpful personal AI assistant.".to_string());
-    let prompt: String = Input::new()
-        .with_prompt("System prompt (optional)")
-        .default(default)
-        .allow_empty(true)
-        .interact_text()
-        .context("system prompt input cancelled")?;
-
-    Ok(Some(prompt))
-}
-
-// ---------------------------------------------------------------------------
-// Section: Soul (personality)
-// ---------------------------------------------------------------------------
-
-fn section_soul(config_dir: &Path) -> Result<()> {
-    println!();
-    println!("  --- Soul (bot personality) ---");
-    println!("  soul.md defines your bot's personality, tone, and behavioral guidelines.");
-    println!("  It is separate from the system prompt and supports full markdown.");
-    println!();
-
-    let soul_path = config_dir.join("soul.md");
-
-    if soul_path.exists() {
-        let content = std::fs::read_to_string(&soul_path).unwrap_or_default();
-        if !content.trim().is_empty() {
-            let preview: Vec<&str> = content.lines().take(3).collect();
-            println!("  Existing soul.md:");
-            for line in &preview {
-                println!("    {line}");
-            }
-            if content.lines().count() > 3 {
-                println!("    ...");
-            }
-            println!();
-
-            let choices = &[
-                "Keep current",
-                "Replace with default",
-                "Write custom",
-                "Delete",
-            ];
-            let sel = Select::new()
-                .with_prompt("Soul personality")
-                .items(choices)
-                .default(0)
-                .interact()
-                .context("selection cancelled")?;
-
-            match sel {
-                0 => return Ok(()),
-                1 => {
-                    write_default_soul(&soul_path)?;
-                    println!("  Default soul.md written.");
-                }
-                2 => {
-                    write_custom_soul(&soul_path)?;
-                }
-                3 => {
-                    std::fs::remove_file(&soul_path).context("failed to delete soul.md")?;
-                    println!("  soul.md deleted.");
-                }
-                _ => {}
-            }
-            return Ok(());
-        }
-    }
-
-    // No existing soul.md - offer choices
-    let mut choices = vec!["Create default soul.md (recommended)", "Write custom"];
-
-    // Check for OpenClaw SOUL.md
-    let openclaw_soul = crate::migrate::detect_openclaw_dir(None).and_then(|dir| {
-        let upper = dir.join("SOUL.md");
-        let lower = dir.join("soul.md");
-        if upper.exists() {
-            Some(upper)
-        } else if lower.exists() {
-            Some(lower)
-        } else {
-            None
-        }
-    });
-
-    if openclaw_soul.is_some() {
-        choices.push("Import from OpenClaw");
-    }
-    choices.push("Skip");
-
-    let sel = Select::new()
-        .with_prompt("Soul personality")
-        .items(&choices)
-        .default(0)
-        .interact()
-        .context("selection cancelled")?;
-
-    let chosen = choices[sel];
-    if chosen.starts_with("Create default") {
-        write_default_soul(&soul_path)?;
-        println!("  Default soul.md written to {}", soul_path.display());
-    } else if chosen == "Write custom" {
-        write_custom_soul(&soul_path)?;
-    } else if chosen == "Import from OpenClaw" {
-        if let Some(ref src) = openclaw_soul {
-            std::fs::copy(src, &soul_path).context("failed to copy SOUL.md from OpenClaw")?;
-            println!("  Imported soul.md from {}", src.display());
-        }
-    } else {
-        println!(
-            "  Skipping soul.md. You can create one later at {}",
-            soul_path.display()
-        );
-    }
-
-    Ok(())
-}
-
-fn write_default_soul(path: &Path) -> Result<()> {
-    let default = "\
-# Soul
-
-You are a helpful, friendly AI assistant.
-
-## Personality
-- Warm and approachable, but concise
-- Honest about limitations
-- Adapt tone to match the user's style
-
-## Guidelines
-- Be direct and actionable
-- Ask clarifying questions when needed
-- Respect the user's time
-";
-    std::fs::write(path, default).context("failed to write soul.md")?;
-    Ok(())
-}
-
-fn write_custom_soul(path: &Path) -> Result<()> {
-    let content: String = Input::new()
-        .with_prompt("Enter soul content (personality description)")
-        .allow_empty(true)
-        .interact_text()
-        .context("soul input cancelled")?;
-
-    if content.trim().is_empty() {
-        println!("  Empty input, skipping soul.md.");
-        return Ok(());
-    }
-
-    std::fs::write(path, &content).context("failed to write soul.md")?;
-    println!("  Custom soul.md written.");
-    Ok(())
-}
-
-// ---------------------------------------------------------------------------
 // Section: Channels
 // ---------------------------------------------------------------------------
 
@@ -1171,13 +983,7 @@ pub async fn run_wizard(config_dir: &Path) -> Result<()> {
     // --- Section 1: Provider ---
     let provider_result = section_provider(&existing, &detected).await?;
 
-    // --- Section 2: System Prompt ---
-    let new_prompt = section_system_prompt(&existing)?;
-
-    // --- Section 3: Soul (personality) ---
-    section_soul(config_dir)?;
-
-    // --- Section 4: Channels ---
+    // --- Section 2: Channels ---
     let new_channels = section_channels(&existing, &detected).await?;
 
     // --- Build config ---
@@ -1257,15 +1063,6 @@ pub async fn run_wizard(config_dir: &Path) -> Result<()> {
         config.llm.insert("main".to_string(), llm_config);
     }
 
-    // Apply system prompt changes
-    if let Some(prompt) = new_prompt {
-        config.agent.system_prompt = if prompt.is_empty() {
-            None
-        } else {
-            Some(prompt)
-        };
-    }
-
     // Apply channel changes
     if let Some(channels) = new_channels {
         config.channels = channels;
@@ -1291,20 +1088,6 @@ pub async fn run_wizard(config_dir: &Path) -> Result<()> {
             .unwrap_or(false);
         let status = if verified { " (verified)" } else { "" };
         println!("  Provider:  {}{status}", main.provider);
-    }
-
-    if let Some(prompt) = &config.agent.system_prompt {
-        let display = if prompt.len() > 50 {
-            format!("{}...", &prompt[..47])
-        } else {
-            prompt.clone()
-        };
-        println!("  Prompt:    {display}");
-    }
-
-    let soul_path = config_dir.join("soul.md");
-    if soul_path.exists() {
-        println!("  Soul:      {}", soul_path.display());
     }
 
     if !config.channels.is_empty() {

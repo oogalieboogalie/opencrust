@@ -101,9 +101,9 @@ impl GatewayServer {
         state.spawn_session_cleanup();
         state.spawn_config_applier();
 
-        // Watch soul.md for hot-reload
+        // Watch dna.md for hot-reload
         let config_dir = opencrust_config::ConfigLoader::default_config_dir();
-        spawn_soul_watcher(Arc::clone(&state), config_dir);
+        spawn_dna_watcher(Arc::clone(&state), config_dir);
 
         // Spawn MCP health monitor for auto-reconnect
         if let Some(ref arc) = mcp_manager_arc {
@@ -243,10 +243,10 @@ async fn shutdown_signal() {
     }
 }
 
-/// Watch `{config_dir}/soul.md` for changes and hot-reload soul content into
-/// the agent runtime. On delete, soul content is cleared.
-fn spawn_soul_watcher(state: Arc<AppState>, config_dir: PathBuf) {
-    let soul_filename = std::ffi::OsStr::new("soul.md");
+/// Watch `{config_dir}/dna.md` for changes and hot-reload DNA content into
+/// the agent runtime. On delete, DNA content is cleared.
+fn spawn_dna_watcher(state: Arc<AppState>, config_dir: PathBuf) {
+    let dna_filename = std::ffi::OsStr::new("dna.md");
     let (notify_tx, mut notify_rx) = tokio::sync::mpsc::channel::<()>(8);
 
     let watcher_result =
@@ -257,11 +257,11 @@ fn spawn_soul_watcher(state: Arc<AppState>, config_dir: PathBuf) {
                     EventKind::Create(_) | EventKind::Modify(_) | EventKind::Remove(_)
                 );
                 if dominated {
-                    let touches_soul = event
+                    let touches_dna = event
                         .paths
                         .iter()
-                        .any(|p| p.file_name().map(|f| f == soul_filename).unwrap_or(false));
-                    if touches_soul {
+                        .any(|p| p.file_name().map(|f| f == dna_filename).unwrap_or(false));
+                    if touches_dna {
                         let _ = notify_tx.try_send(());
                     }
                 }
@@ -271,19 +271,19 @@ fn spawn_soul_watcher(state: Arc<AppState>, config_dir: PathBuf) {
     let mut watcher = match watcher_result {
         Ok(w) => w,
         Err(e) => {
-            warn!("failed to create soul.md watcher: {e}");
+            warn!("failed to create dna.md watcher: {e}");
             return;
         }
     };
 
     if let Err(e) = watcher.watch(&config_dir, RecursiveMode::NonRecursive) {
-        warn!("failed to watch config dir for soul.md: {e}");
+        warn!("failed to watch config dir for dna.md: {e}");
         return;
     }
 
-    info!("watching soul.md for hot-reload");
+    info!("watching dna.md for hot-reload");
 
-    let soul_path = config_dir.join("soul.md");
+    let dna_path = config_dir.join("dna.md");
     tokio::spawn(async move {
         let _watcher = watcher; // prevent drop
         loop {
@@ -294,21 +294,21 @@ fn spawn_soul_watcher(state: Arc<AppState>, config_dir: PathBuf) {
             tokio::time::sleep(std::time::Duration::from_millis(500)).await;
             while notify_rx.try_recv().is_ok() {}
 
-            match std::fs::read_to_string(&soul_path) {
+            match std::fs::read_to_string(&dna_path) {
                 Ok(content) if !content.trim().is_empty() => {
-                    state.agents.set_soul_content(Some(content));
-                    info!("soul.md reloaded");
+                    state.agents.set_dna_content(Some(content));
+                    info!("dna.md reloaded");
                 }
                 Ok(_) => {
-                    state.agents.set_soul_content(None);
-                    info!("soul.md is empty, cleared soul content");
+                    state.agents.set_dna_content(None);
+                    info!("dna.md is empty, cleared DNA content");
                 }
                 Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
-                    state.agents.set_soul_content(None);
-                    info!("soul.md removed, cleared soul content");
+                    state.agents.set_dna_content(None);
+                    info!("dna.md removed, cleared DNA content");
                 }
                 Err(e) => {
-                    warn!("failed to read soul.md: {e}");
+                    warn!("failed to read dna.md: {e}");
                 }
             }
         }
