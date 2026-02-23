@@ -1,6 +1,7 @@
 use base64::Engine;
 use base64::engine::general_purpose::STANDARD as BASE64;
 use ring::aead::{AES_256_GCM, Aad, LessSafeKey, Nonce, UnboundKey};
+#[cfg(feature = "os-keyring")]
 use ring::digest::{SHA256, digest};
 use ring::pbkdf2;
 use ring::rand::{SecureRandom, SystemRandom};
@@ -8,35 +9,18 @@ use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::num::NonZeroU32;
 use std::path::{Path, PathBuf};
-use std::sync::{OnceLock, RwLock};
 use tracing::{debug, info, warn};
 
 const PBKDF2_ITERATIONS: u32 = 600_000;
 const SALT_LEN: usize = 32;
 const NONCE_LEN: usize = 12; // AES-256-GCM nonce
 const KEY_LEN: usize = 32; // 256 bits
+#[cfg(feature = "os-keyring")]
 const GENERATED_PASSPHRASE_LEN: usize = 32;
+#[cfg(feature = "os-keyring")]
 const KEYRING_SERVICE: &str = "opencrust";
+#[cfg(feature = "os-keyring")]
 const KEYRING_ACCOUNT_PREFIX: &str = "vault-passphrase";
-
-#[derive(Debug, Clone, PartialEq, Eq)]
-struct VaultFileFingerprint {
-    len: u64,
-    modified_unix_nanos: u128,
-}
-
-#[derive(Debug, Clone)]
-struct VaultGetCacheEntry {
-    fingerprint: VaultFileFingerprint,
-    passphrase_hash: [u8; 32],
-    entries: HashMap<String, String>,
-}
-
-static VAULT_GET_CACHE: OnceLock<RwLock<HashMap<PathBuf, VaultGetCacheEntry>>> = OnceLock::new();
-
-fn vault_get_cache() -> &'static RwLock<HashMap<PathBuf, VaultGetCacheEntry>> {
-    VAULT_GET_CACHE.get_or_init(|| RwLock::new(HashMap::new()))
-}
 
 /// On-disk representation of the encrypted vault.
 #[derive(Debug, Serialize, Deserialize)]
@@ -49,7 +33,7 @@ struct VaultFile {
 /// Encrypted key-value credential store backed by AES-256-GCM.
 ///
 /// Credentials are kept in memory as a plain `HashMap` after decryption.
-/// Call [`save`] to persist changes back to disk.
+/// Call [`CredentialVault::save`] to persist changes back to disk.
 pub struct CredentialVault {
     path: PathBuf,
     derived_key: Vec<u8>,
@@ -209,28 +193,9 @@ pub fn try_vault_get(vault_path: &Path, key: &str) -> Option<String> {
     }
 
     let passphrase = resolve_vault_passphrase(vault_path, false)?;
-    let passphrase_hash = hash_passphrase(&passphrase);
-    let fingerprint_before_open = vault_file_fingerprint(vault_path);
-    if let Some(fingerprint) = fingerprint_before_open.as_ref()
-        && let Some(value) = cached_vault_value(vault_path, key, fingerprint, &passphrase_hash)
-    {
-        return value;
-    }
 
     match CredentialVault::open(vault_path, &passphrase) {
-        Ok(vault) => {
-            let value = vault.get(key).map(|s| s.to_string());
-            let fingerprint = vault_file_fingerprint(vault_path).or(fingerprint_before_open);
-            if let Some(fingerprint) = fingerprint {
-                cache_vault_entries(
-                    vault_path,
-                    fingerprint,
-                    passphrase_hash,
-                    vault.entries.clone(),
-                );
-            }
-            value
-        }
+        Ok(vault) => vault.get(key).map(|s| s.to_string()),
         Err(e) => {
             warn!("could not open credential vault: {e}");
             None
@@ -253,7 +218,6 @@ pub fn try_vault_set(vault_path: &Path, key: &str, value: &str) -> bool {
             return false;
         }
     };
-    let passphrase_hash = hash_passphrase(&passphrase);
 
     let mut vault = if vault_exists {
         match CredentialVault::open(vault_path, &passphrase) {
@@ -276,16 +240,6 @@ pub fn try_vault_set(vault_path: &Path, key: &str, value: &str) -> bool {
     vault.set(key, value);
     match vault.save() {
         Ok(()) => {
-            if let Some(fingerprint) = vault_file_fingerprint(vault_path) {
-                cache_vault_entries(
-                    vault_path,
-                    fingerprint,
-                    passphrase_hash,
-                    vault.entries.clone(),
-                );
-            } else {
-                invalidate_vault_cache(vault_path);
-            }
             info!("stored credential '{key}' in vault");
             true
         }
@@ -327,12 +281,23 @@ fn resolve_vault_passphrase(vault_path: &Path, allow_create: bool) -> Option<Str
         return Some(keyring_passphrase);
     }
 
-    let generated = generate_passphrase()?;
-    if write_keyring_passphrase(vault_path, &generated) {
-        info!("generated vault passphrase and stored it in OS keychain");
-        Some(generated)
-    } else {
-        warn!("failed to store generated vault passphrase in OS keychain");
+    #[cfg(feature = "os-keyring")]
+    {
+        let generated = generate_passphrase()?;
+        if write_keyring_passphrase(vault_path, &generated) {
+            info!("generated vault passphrase and stored it in OS keychain");
+            Some(generated)
+        } else {
+            warn!("failed to store generated vault passphrase in OS keychain");
+            None
+        }
+    }
+
+    #[cfg(not(feature = "os-keyring"))]
+    {
+        warn!(
+            "no vault passphrase available: set OPENCRUST_VAULT_PASSPHRASE (os-keyring feature disabled)"
+        );
         None
     }
 }
@@ -344,6 +309,7 @@ fn vault_env_passphrase() -> Option<String> {
         .filter(|p| !p.is_empty())
 }
 
+#[cfg(feature = "os-keyring")]
 fn generate_passphrase() -> Option<String> {
     let rng = SystemRandom::new();
     let mut bytes = [0u8; GENERATED_PASSPHRASE_LEN];
@@ -354,6 +320,7 @@ fn generate_passphrase() -> Option<String> {
     Some(BASE64.encode(bytes))
 }
 
+#[cfg(feature = "os-keyring")]
 fn keyring_account_for_path(vault_path: &Path) -> String {
     let path_bytes = vault_path.to_string_lossy();
     let hash = digest(&SHA256, path_bytes.as_bytes());
@@ -365,6 +332,7 @@ fn keyring_account_for_path(vault_path: &Path) -> String {
     format!("{KEYRING_ACCOUNT_PREFIX}:{hex}")
 }
 
+#[cfg(feature = "os-keyring")]
 fn keyring_entry_for_path(vault_path: &Path) -> Option<keyring::Entry> {
     let account = keyring_account_for_path(vault_path);
     match keyring::Entry::new(KEYRING_SERVICE, &account) {
@@ -376,6 +344,7 @@ fn keyring_entry_for_path(vault_path: &Path) -> Option<keyring::Entry> {
     }
 }
 
+#[cfg(feature = "os-keyring")]
 fn read_keyring_passphrase(vault_path: &Path) -> Option<String> {
     let entry = keyring_entry_for_path(vault_path)?;
     match entry.get_password() {
@@ -389,6 +358,12 @@ fn read_keyring_passphrase(vault_path: &Path) -> Option<String> {
     }
 }
 
+#[cfg(not(feature = "os-keyring"))]
+fn read_keyring_passphrase(_vault_path: &Path) -> Option<String> {
+    None
+}
+
+#[cfg(feature = "os-keyring")]
 fn write_keyring_passphrase(vault_path: &Path, passphrase: &str) -> bool {
     let Some(entry) = keyring_entry_for_path(vault_path) else {
         return false;
@@ -403,83 +378,9 @@ fn write_keyring_passphrase(vault_path: &Path, passphrase: &str) -> bool {
     }
 }
 
-fn hash_passphrase(passphrase: &str) -> [u8; 32] {
-    let digest = digest(&SHA256, passphrase.as_bytes());
-    let mut out = [0u8; 32];
-    out.copy_from_slice(digest.as_ref());
-    out
-}
-
-fn vault_file_fingerprint(vault_path: &Path) -> Option<VaultFileFingerprint> {
-    let metadata = std::fs::metadata(vault_path).ok()?;
-    let modified = metadata.modified().ok()?;
-    let modified_unix_nanos = modified
-        .duration_since(std::time::UNIX_EPOCH)
-        .ok()
-        .map(|d| d.as_nanos())
-        .unwrap_or_default();
-    Some(VaultFileFingerprint {
-        len: metadata.len(),
-        modified_unix_nanos,
-    })
-}
-
-fn cached_vault_value(
-    vault_path: &Path,
-    key: &str,
-    fingerprint: &VaultFileFingerprint,
-    passphrase_hash: &[u8; 32],
-) -> Option<Option<String>> {
-    let cache = vault_get_cache();
-    let guard = match cache.read() {
-        Ok(g) => g,
-        Err(poisoned) => {
-            warn!("vault read cache lock poisoned; recovering");
-            poisoned.into_inner()
-        }
-    };
-
-    let entry = guard.get(vault_path)?;
-    if &entry.fingerprint != fingerprint || &entry.passphrase_hash != passphrase_hash {
-        return None;
-    }
-    Some(entry.entries.get(key).cloned())
-}
-
-fn cache_vault_entries(
-    vault_path: &Path,
-    fingerprint: VaultFileFingerprint,
-    passphrase_hash: [u8; 32],
-    entries: HashMap<String, String>,
-) {
-    let cache = vault_get_cache();
-    let mut guard = match cache.write() {
-        Ok(g) => g,
-        Err(poisoned) => {
-            warn!("vault read cache lock poisoned; recovering");
-            poisoned.into_inner()
-        }
-    };
-    guard.insert(
-        vault_path.to_path_buf(),
-        VaultGetCacheEntry {
-            fingerprint,
-            passphrase_hash,
-            entries,
-        },
-    );
-}
-
-fn invalidate_vault_cache(vault_path: &Path) {
-    let cache = vault_get_cache();
-    let mut guard = match cache.write() {
-        Ok(g) => g,
-        Err(poisoned) => {
-            warn!("vault read cache lock poisoned; recovering");
-            poisoned.into_inner()
-        }
-    };
-    guard.remove(vault_path);
+#[cfg(not(feature = "os-keyring"))]
+fn write_keyring_passphrase(_vault_path: &Path, _passphrase: &str) -> bool {
+    false
 }
 
 fn derive_key(passphrase: &str, salt: &[u8]) -> Vec<u8> {
@@ -575,7 +476,7 @@ mod tests {
     }
 
     #[test]
-    fn try_vault_get_cache_refreshes_after_external_write() {
+    fn try_vault_get_reflects_external_write() {
         let path = temp_vault_path("cache-refresh");
         let passphrase = "cache-passphrase-123";
 

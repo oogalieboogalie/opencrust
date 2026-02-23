@@ -16,6 +16,8 @@ use uuid::Uuid;
 const SESSION_TTL: Duration = Duration::from_secs(3600); // 1 hour
 /// How often the cleanup task runs.
 const CLEANUP_INTERVAL: Duration = Duration::from_secs(300); // 5 minutes
+/// Maximum retained messages per session in persistent storage.
+const SESSION_MESSAGE_LIMIT: usize = 500;
 
 /// Shared application state accessible from all request handlers.
 pub struct AppState {
@@ -30,6 +32,8 @@ pub struct AppState {
     /// MCP manager wrapped in Arc for health monitoring.
     pub mcp_manager_arc: Option<Arc<opencrust_agents::McpManager>>,
     pub session_store: Option<Arc<Mutex<SessionStore>>>,
+    /// Per-session rolling summary string used by long-context agent flows.
+    session_summaries: DashMap<String, String>,
     /// Runtime connection state for Google Workspace integration.
     google_workspace_integration_connected: AtomicBool,
     /// Connected Google account email (if known).
@@ -74,6 +78,7 @@ impl AppState {
             mcp_manager: None,
             mcp_manager_arc: None,
             session_store: None,
+            session_summaries: DashMap::new(),
             google_workspace_integration_connected: AtomicBool::new(false),
             google_workspace_email: RwLock::new(None),
             google_oauth_states: DashMap::new(),
@@ -174,6 +179,7 @@ impl AppState {
     /// where the external chat ID determines the session key).
     pub fn create_session_with_id(&self, id: String) {
         let now = Instant::now();
+        self.session_summaries.remove(&id);
         self.sessions.insert(
             id.clone(),
             SessionState {
@@ -198,12 +204,47 @@ impl AppState {
         }
     }
 
+    fn session_metadata_for(
+        &self,
+        user_id: Option<&str>,
+        summary: Option<&str>,
+    ) -> serde_json::Value {
+        let mut metadata = serde_json::Map::new();
+        if let Some(key) = self.continuity_key(user_id) {
+            metadata.insert("continuity_key".to_string(), serde_json::Value::String(key));
+        }
+        if let Some(summary) = summary.map(str::trim).filter(|s| !s.is_empty()) {
+            metadata.insert(
+                "summary".to_string(),
+                serde_json::Value::String(summary.to_string()),
+            );
+        }
+        serde_json::Value::Object(metadata)
+    }
+
     /// Return a cloned history snapshot for a session.
     pub fn session_history(&self, session_id: &str) -> Vec<ChatMessage> {
         self.sessions
             .get(session_id)
             .map(|s| s.history.clone())
             .unwrap_or_default()
+    }
+
+    /// Return the latest in-memory summary for a session, if any.
+    pub fn session_summary(&self, session_id: &str) -> Option<String> {
+        self.session_summaries
+            .get(session_id)
+            .map(|summary| summary.clone())
+    }
+
+    /// Update the in-memory summary for a session.
+    pub fn update_session_summary(&self, session_id: &str, summary: &str) {
+        if summary.trim().is_empty() {
+            self.session_summaries.remove(session_id);
+            return;
+        }
+        self.session_summaries
+            .insert(session_id.to_string(), summary.to_string());
     }
 
     /// Ensure a session is present in memory and hydrate recent history from persistent storage.
@@ -240,14 +281,26 @@ impl AppState {
 
         let channel = channel_id.unwrap_or("web");
         let user = user_id.unwrap_or("anonymous");
-        let metadata = self
-            .continuity_key(user_id)
-            .map(|k| serde_json::json!({ "continuity_key": k }))
-            .unwrap_or_else(|| serde_json::json!({}));
+        let current_summary = self.session_summary(session_id);
 
         let mut loaded_history = Vec::new();
+        let persisted_summary;
         {
             let guard = store.lock().await;
+            persisted_summary = guard
+                .load_session_metadata(session_id)
+                .ok()
+                .flatten()
+                .and_then(|meta| {
+                    meta.get("summary")
+                        .and_then(|v| v.as_str())
+                        .map(|v| v.to_string())
+                });
+
+            let metadata = self.session_metadata_for(
+                user_id,
+                current_summary.as_deref().or(persisted_summary.as_deref()),
+            );
             if let Err(e) = guard.upsert_session(session_id, channel, user, &metadata) {
                 warn!("failed to upsert session {session_id} in session store: {e}");
             }
@@ -275,6 +328,13 @@ impl AppState {
                     }
                 }
             }
+        }
+
+        if current_summary.is_none()
+            && let Some(summary) = persisted_summary
+        {
+            self.session_summaries
+                .insert(session_id.to_string(), summary);
         }
 
         if should_load
@@ -322,10 +382,8 @@ impl AppState {
 
         let channel = channel_id.unwrap_or("web");
         let user = user_id.unwrap_or("anonymous");
-        let metadata = self
-            .continuity_key(user_id)
-            .map(|k| serde_json::json!({ "continuity_key": k }))
-            .unwrap_or_else(|| serde_json::json!({}));
+        let summary = self.session_summary(session_id);
+        let metadata = self.session_metadata_for(user_id, summary.as_deref());
 
         let guard = store.lock().await;
         if let Err(e) = guard.upsert_session(session_id, channel, user, &metadata) {
@@ -349,6 +407,9 @@ impl AppState {
             &serde_json::json!({ "channel_id": channel, "user_id": user }),
         ) {
             warn!("failed to persist assistant message for {session_id}: {e}");
+        }
+        if let Err(e) = guard.prune_old_messages(session_id, SESSION_MESSAGE_LIMIT) {
+            warn!("failed to prune old messages for {session_id}: {e}");
         }
     }
 
@@ -384,6 +445,10 @@ impl AppState {
                 true
             }
         });
+
+        // Keep summaries in sync with active sessions.
+        self.session_summaries
+            .retain(|session_id, _| self.sessions.contains_key(session_id));
 
         if removed > 0 {
             info!("cleaned up {removed} expired sessions");

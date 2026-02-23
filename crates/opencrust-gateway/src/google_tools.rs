@@ -4,6 +4,10 @@ use chrono::{DateTime, NaiveDate, Utc};
 use opencrust_agents::tools::{Tool, ToolContext, ToolOutput};
 use opencrust_common::{Error, Result};
 use reqwest::Url;
+use std::collections::hash_map::DefaultHasher;
+use std::hash::{Hash, Hasher};
+use std::sync::{OnceLock, RwLock};
+use std::time::{Duration, Instant};
 
 const BASE64_URL_SAFE_NO_PAD: base64::engine::GeneralPurpose =
     base64::engine::general_purpose::URL_SAFE_NO_PAD;
@@ -13,6 +17,28 @@ const GOOGLE_GMAIL_API_BASE: &str = "https://gmail.googleapis.com/gmail/v1/users
 const GOOGLE_DRIVE_FILES_API: &str = "https://www.googleapis.com/drive/v3/files";
 const DEFAULT_MAX_RESULTS: usize = 10;
 const MAX_RESULTS_LIMIT: usize = 50;
+const ACCESS_TOKEN_REFRESH_SKEW_SECS: u64 = 60;
+
+#[derive(Debug, Clone)]
+struct CachedGoogleAccessToken {
+    cache_key_hash: u64,
+    access_token: String,
+    expires_at: Instant,
+}
+
+static GOOGLE_ACCESS_TOKEN_CACHE: OnceLock<RwLock<Option<CachedGoogleAccessToken>>> =
+    OnceLock::new();
+
+fn google_access_token_cache() -> &'static RwLock<Option<CachedGoogleAccessToken>> {
+    GOOGLE_ACCESS_TOKEN_CACHE.get_or_init(|| RwLock::new(None))
+}
+
+fn google_http_client() -> reqwest::Client {
+    reqwest::Client::builder()
+        .no_proxy()
+        .build()
+        .unwrap_or_else(|_| reqwest::Client::new())
+}
 
 #[derive(Debug, Clone)]
 struct GoogleOAuthConfig {
@@ -23,6 +49,7 @@ struct GoogleOAuthConfig {
 #[derive(Debug, serde::Deserialize)]
 struct GoogleTokenResponse {
     access_token: Option<String>,
+    expires_in: Option<u64>,
 }
 
 #[derive(Debug, serde::Deserialize)]
@@ -158,7 +185,7 @@ pub struct GoogleCalendarListEventsTool {
 impl GoogleCalendarListEventsTool {
     pub fn new() -> Self {
         Self {
-            http: reqwest::Client::new(),
+            http: google_http_client(),
         }
     }
 
@@ -290,7 +317,7 @@ pub struct GoogleCalendarGetEventTool {
 impl GoogleCalendarGetEventTool {
     pub fn new() -> Self {
         Self {
-            http: reqwest::Client::new(),
+            http: google_http_client(),
         }
     }
 
@@ -385,7 +412,7 @@ pub struct GoogleGmailListMessagesTool {
 impl GoogleGmailListMessagesTool {
     pub fn new() -> Self {
         Self {
-            http: reqwest::Client::new(),
+            http: google_http_client(),
         }
     }
 
@@ -510,7 +537,7 @@ pub struct GoogleGmailGetMessageTool {
 impl GoogleGmailGetMessageTool {
     pub fn new() -> Self {
         Self {
-            http: reqwest::Client::new(),
+            http: google_http_client(),
         }
     }
 
@@ -613,7 +640,7 @@ pub struct GoogleGmailSendMessageTool {
 impl GoogleGmailSendMessageTool {
     pub fn new() -> Self {
         Self {
-            http: reqwest::Client::new(),
+            http: google_http_client(),
         }
     }
 
@@ -765,7 +792,7 @@ pub struct GoogleDriveListFilesTool {
 impl GoogleDriveListFilesTool {
     pub fn new() -> Self {
         Self {
-            http: reqwest::Client::new(),
+            http: google_http_client(),
         }
     }
 
@@ -891,7 +918,7 @@ pub struct GoogleDriveGetFileMetadataTool {
 impl GoogleDriveGetFileMetadataTool {
     pub fn new() -> Self {
         Self {
-            http: reqwest::Client::new(),
+            http: google_http_client(),
         }
     }
 
@@ -997,6 +1024,11 @@ async fn read_access_token(http: &reqwest::Client) -> Result<String> {
     let refresh_token = google_oauth_secret("GOOGLE_WORKSPACE_REFRESH_TOKEN").ok_or_else(|| {
         Error::Agent("google refresh token missing; reconnect integration".into())
     })?;
+    let cache_key_hash = google_access_token_cache_key(&oauth.client_id, &refresh_token);
+
+    if let Some(cached) = get_cached_access_token(cache_key_hash) {
+        return Ok(cached);
+    }
 
     let resp = http
         .post(GOOGLE_TOKEN_URL)
@@ -1023,10 +1055,51 @@ async fn read_access_token(http: &reqwest::Client) -> Result<String> {
         .json::<GoogleTokenResponse>()
         .await
         .map_err(|e| Error::Agent(format!("failed to parse google token response: {e}")))?;
-    token
+    let access_token = token
         .access_token
         .filter(|v| !v.trim().is_empty())
-        .ok_or_else(|| Error::Agent("google token response missing access_token".to_string()))
+        .ok_or_else(|| Error::Agent("google token response missing access_token".to_string()))?;
+
+    cache_access_token(
+        cache_key_hash,
+        access_token.clone(),
+        token.expires_in.unwrap_or(3600),
+    );
+
+    Ok(access_token)
+}
+
+fn google_access_token_cache_key(client_id: &str, refresh_token: &str) -> u64 {
+    let mut hasher = DefaultHasher::new();
+    client_id.hash(&mut hasher);
+    refresh_token.hash(&mut hasher);
+    hasher.finish()
+}
+
+fn get_cached_access_token(cache_key_hash: u64) -> Option<String> {
+    let guard = google_access_token_cache()
+        .read()
+        .unwrap_or_else(|e| e.into_inner());
+    let entry = guard.as_ref()?;
+    if entry.cache_key_hash != cache_key_hash || Instant::now() >= entry.expires_at {
+        return None;
+    }
+    Some(entry.access_token.clone())
+}
+
+fn cache_access_token(cache_key_hash: u64, access_token: String, expires_in_secs: u64) {
+    let ttl = expires_in_secs
+        .saturating_sub(ACCESS_TOKEN_REFRESH_SKEW_SECS)
+        .max(10);
+    let expires_at = Instant::now() + Duration::from_secs(ttl);
+    let mut guard = google_access_token_cache()
+        .write()
+        .unwrap_or_else(|e| e.into_inner());
+    *guard = Some(CachedGoogleAccessToken {
+        cache_key_hash,
+        access_token,
+        expires_at,
+    });
 }
 
 fn parse_list_events_input(input: &serde_json::Value) -> Result<ListEventsInput> {
@@ -1443,8 +1516,11 @@ fn google_oauth_config() -> Option<GoogleOAuthConfig> {
 }
 
 fn google_oauth_secret(key: &str) -> Option<String> {
-    crate::bootstrap::default_vault_path()
-        .and_then(|path| opencrust_security::try_vault_get(&path, key))
+    crate::google_secrets::get_runtime_secret(key)
+        .or_else(|| {
+            crate::bootstrap::default_vault_path()
+                .and_then(|path| opencrust_security::try_vault_get(&path, key))
+        })
         .or_else(|| std::env::var(key).ok())
         .map(|v| v.trim().to_string())
         .filter(|v| !v.is_empty())
@@ -1466,4 +1542,199 @@ fn parse_google_error_body(body: &str) -> Option<String> {
                 None => None,
             })
         })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use chrono::Timelike;
+    use std::sync::{Mutex, OnceLock};
+    use std::time::{Duration, Instant};
+
+    fn cache_lock() -> &'static Mutex<()> {
+        static LOCK: OnceLock<Mutex<()>> = OnceLock::new();
+        LOCK.get_or_init(|| Mutex::new(()))
+    }
+
+    #[test]
+    fn parse_list_events_input_defaults_and_rejects_invalid_range() {
+        let defaults = serde_json::json!({});
+        let parsed = parse_list_events_input(&defaults).expect("defaults should parse");
+        assert_eq!(parsed.calendar_id, "primary");
+        assert!(parsed.time_max.is_none());
+
+        let explicit = serde_json::json!({
+            "calendar_id": "team",
+            "time_min": "2026-02-23T10:00:00Z",
+            "time_max": "2026-02-23T11:00:00Z",
+        });
+        let parsed = parse_list_events_input(&explicit).expect("explicit values should parse");
+        assert_eq!(parsed.calendar_id, "team");
+        assert_eq!(parsed.time_min.to_rfc3339(), "2026-02-23T10:00:00+00:00");
+        assert_eq!(
+            parsed.time_max.map(|dt| dt.to_rfc3339()),
+            Some("2026-02-23T11:00:00+00:00".to_string())
+        );
+
+        let invalid = serde_json::json!({
+            "time_min": "2026-02-23T10:00:00Z",
+            "time_max": "2026-02-23T09:00:00Z",
+        });
+        assert!(parse_list_events_input(&invalid).is_err());
+    }
+
+    #[test]
+    fn parse_list_gmail_input_defaults_user_and_clamps_max_results() {
+        let defaults = serde_json::json!({});
+        let parsed = parse_list_gmail_input(&defaults).expect("defaults should parse");
+        assert_eq!(parsed.user_id, "me");
+        assert_eq!(parsed.max_results, DEFAULT_MAX_RESULTS);
+
+        let high = serde_json::json!({ "max_results": 999u64 });
+        let parsed = parse_list_gmail_input(&high).expect("high should parse");
+        assert_eq!(parsed.max_results, MAX_RESULTS_LIMIT);
+
+        let low = serde_json::json!({ "max_results": 0u64 });
+        let parsed = parse_list_gmail_input(&low).expect("low should parse");
+        assert_eq!(parsed.max_results, 1);
+    }
+
+    #[test]
+    fn parse_gmail_get_message_input_rejects_invalid_format() {
+        let input = serde_json::json!({
+            "message_id": "m-1",
+            "format": "raw",
+        });
+        assert!(parse_gmail_get_message_input(&input).is_err());
+    }
+
+    #[test]
+    fn parse_gmail_send_message_input_checks_required_fields_and_header_injection() {
+        let missing_to = serde_json::json!({
+            "subject": "Hello",
+            "body_text": "Body",
+        });
+        assert!(parse_gmail_send_message_input(&missing_to).is_err());
+
+        let missing_subject = serde_json::json!({
+            "to": "a@example.com",
+            "body_text": "Body",
+        });
+        assert!(parse_gmail_send_message_input(&missing_subject).is_err());
+
+        let parsed = parse_gmail_send_message_input(&serde_json::json!({
+            "to": "a@example.com, b@example.com",
+            "subject": "Hello",
+            "body_text": "Body",
+        }))
+        .expect("comma-separated recipients should parse");
+        assert_eq!(
+            parsed.to,
+            vec!["a@example.com".to_string(), "b@example.com".to_string()]
+        );
+
+        // Newline-only subject is reduced to empty and rejected.
+        let injected = serde_json::json!({
+            "to": "a@example.com",
+            "subject": "\r\n",
+            "body_text": "Body",
+        });
+        assert!(parse_gmail_send_message_input(&injected).is_err());
+    }
+
+    #[test]
+    fn parse_drive_inputs_cover_list_and_required_file_id() {
+        let list = parse_list_drive_input(&serde_json::json!({
+            "query": "mimeType='application/pdf'",
+            "order_by": "modifiedTime desc",
+            "max_results": 100u64,
+        }))
+        .expect("list input should parse");
+        assert_eq!(list.query.as_deref(), Some("mimeType='application/pdf'"));
+        assert_eq!(list.order_by.as_deref(), Some("modifiedTime desc"));
+        assert_eq!(list.max_results, MAX_RESULTS_LIMIT);
+
+        assert!(parse_drive_get_file_metadata_input(&serde_json::json!({})).is_err());
+        let file = parse_drive_get_file_metadata_input(&serde_json::json!({
+            "file_id": "abc123"
+        }))
+        .expect("file_id should parse");
+        assert_eq!(file.file_id, "abc123");
+    }
+
+    #[test]
+    fn parse_rfc3339_utc_handles_relative_and_absolute_inputs() {
+        let now = parse_rfc3339_utc("now").expect("now should parse");
+        assert!((Utc::now() - now).num_seconds().abs() <= 2);
+
+        let today = parse_rfc3339_utc("today").expect("today should parse");
+        assert_eq!(today.date_naive(), Utc::now().date_naive());
+        assert_eq!(today.hour(), 0);
+        assert_eq!(today.minute(), 0);
+        assert_eq!(today.second(), 0);
+
+        let tomorrow = parse_rfc3339_utc("tomorrow").expect("tomorrow should parse");
+        assert_eq!(
+            tomorrow.date_naive(),
+            Utc::now().date_naive().succ_opt().expect("tomorrow exists")
+        );
+
+        let ymd = parse_rfc3339_utc("2026-03-01").expect("date should parse");
+        assert_eq!(ymd.date_naive().to_string(), "2026-03-01");
+
+        let full = parse_rfc3339_utc("2026-02-23T15:04:05Z").expect("rfc3339 should parse");
+        assert_eq!(full.to_rfc3339(), "2026-02-23T15:04:05+00:00");
+    }
+
+    #[test]
+    fn access_token_cache_round_trip_and_expired_tokens() {
+        let _guard = cache_lock().lock().expect("cache lock");
+
+        cache_access_token(7, "tok-123".to_string(), 120);
+        assert_eq!(get_cached_access_token(7), Some("tok-123".to_string()));
+
+        {
+            let mut guard = google_access_token_cache()
+                .write()
+                .unwrap_or_else(|e| e.into_inner());
+            *guard = Some(CachedGoogleAccessToken {
+                cache_key_hash: 7,
+                access_token: "expired".to_string(),
+                expires_at: Instant::now() - Duration::from_secs(1),
+            });
+        }
+        assert_eq!(get_cached_access_token(7), None);
+    }
+
+    #[test]
+    fn build_gmail_raw_message_contains_expected_headers_and_mime_structure() {
+        let input = GmailSendMessageInput {
+            user_id: "me".to_string(),
+            to: vec!["to@example.com".to_string()],
+            cc: vec!["cc@example.com".to_string()],
+            bcc: vec!["bcc@example.com".to_string()],
+            subject: "Subject".to_string(),
+            body_text: "Plain body".to_string(),
+            body_html: Some("<b>HTML</b>".to_string()),
+            thread_id: None,
+        };
+
+        let raw = build_gmail_raw_message(&input);
+        assert!(raw.contains("To: to@example.com\r\n"));
+        assert!(raw.contains("Cc: cc@example.com\r\n"));
+        assert!(raw.contains("Bcc: bcc@example.com\r\n"));
+        assert!(raw.contains("Subject: Subject\r\n"));
+        assert!(raw.contains("MIME-Version: 1.0\r\n"));
+        assert!(raw.contains("multipart/alternative"));
+    }
+
+    #[test]
+    fn sanitize_gmail_header_strips_crlf() {
+        let sanitized =
+            sanitize_gmail_header("Hello\r\nWorld", "subject").expect("header should sanitize");
+        assert_eq!(sanitized, "Hello  World");
+        assert!(!sanitized.contains('\r'));
+        assert!(!sanitized.contains('\n'));
+        assert!(sanitize_gmail_header("\r\n", "subject").is_err());
+    }
 }
