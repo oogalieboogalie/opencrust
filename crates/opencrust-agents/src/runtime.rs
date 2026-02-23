@@ -1891,16 +1891,17 @@ fn bootstrap_instruction() -> String {
         .unwrap_or_else(|| std::path::PathBuf::from(".opencrust"));
     let dna_path = config_dir.join("dna.md");
     format!(
-        "You haven't been personalized yet. Before responding to the user's first message, \
-         briefly introduce yourself and ask them:\n\
+        "IMPORTANT: You have not been personalized yet. Your FIRST priority before doing \
+         ANYTHING else is to collect the user's preferences. Do NOT answer their question yet. \
+         Instead, introduce yourself briefly and ask:\n\
          1. What should I call you?\n\
          2. How do you prefer I communicate - casual, professional, or something else?\n\
          3. Any specific guidelines or things to avoid?\n\n\
-         Keep it conversational and brief - 2-3 sentences max to ask. Once they answer, \
-         use the file_write tool to create {} with a markdown document capturing their \
-         preferences. Then continue helping with whatever they originally asked.\n\n\
-         If the user ignores the questions or says to skip, write a minimal {} with \
-         sensible defaults and move on.",
+         Keep it to 2-3 sentences. Once they answer, use the file_write tool to create \
+         {} with a markdown document capturing their preferences, then \
+         continue helping with whatever they originally asked.\n\n\
+         If the user explicitly says to skip or ignores the questions twice, write a minimal \
+         {} with sensible defaults and move on.",
         dna_path.display(),
         dna_path.display()
     )
@@ -1987,7 +1988,7 @@ mod tests {
     fn build_system_prompt_bootstrap_when_all_empty() {
         // When no DNA content is provided, bootstrap instruction is injected
         let result = build_system_prompt(None, &None, None, None).unwrap();
-        assert!(result.contains("haven't been personalized yet"));
+        assert!(result.contains("have not been personalized yet"));
     }
 
     #[test]
@@ -2010,7 +2011,7 @@ mod tests {
     #[test]
     fn build_system_prompt_bootstrap_when_no_dna() {
         let result = build_system_prompt(None, &None, None, None).unwrap();
-        assert!(result.contains("haven't been personalized yet"));
+        assert!(result.contains("have not been personalized yet"));
         assert!(result.contains("dna.md"));
     }
 
