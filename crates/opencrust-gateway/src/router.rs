@@ -299,7 +299,12 @@ const GOOGLE_OAUTH_STATE_TTL_SECS: u64 = 600;
 fn google_gmail_send_scope_enabled() -> bool {
     std::env::var("OPENCRUST_GOOGLE_ENABLE_GMAIL_SEND_SCOPE")
         .ok()
-        .map(|v| matches!(v.trim().to_ascii_lowercase().as_str(), "1" | "true" | "yes" | "on"))
+        .map(|v| {
+            matches!(
+                v.trim().to_ascii_lowercase().as_str(),
+                "1" | "true" | "yes" | "on"
+            )
+        })
         .unwrap_or(false)
 }
 
@@ -1291,7 +1296,6 @@ fn persist_api_key(vault_key: &str, value: &str) -> bool {
     false
 }
 
-
 fn google_integration_status_json(state: &SharedState) -> serde_json::Value {
     let oauth = google_oauth_config(state);
     let configured = oauth.is_some();
@@ -1689,8 +1693,12 @@ mod tests {
 
     #[test]
     fn placeholder_secret_detection() {
-        assert!(looks_like_placeholder_secret("your_google_client_secret_here"));
-        assert!(looks_like_placeholder_secret("set_a_long_random_passphrase_here"));
+        assert!(looks_like_placeholder_secret(
+            "your_google_client_secret_here"
+        ));
+        assert!(looks_like_placeholder_secret(
+            "set_a_long_random_passphrase_here"
+        ));
         assert!(!looks_like_placeholder_secret("real-secret"));
     }
 
@@ -1699,7 +1707,9 @@ mod tests {
         let html = oauth_popup_result(true, "<script>alert('xss')</script>").0;
         assert!(html.contains("&lt;script&gt;"));
         // The escaped message appears inside <p> tags — no raw script injection.
-        assert!(html.contains("<p>&lt;script&gt;alert(&#x27;xss&#x27;)&lt;/script&gt;</p>")
-            || html.contains("<p>&lt;script&gt;alert('xss')&lt;/script&gt;</p>"));
+        assert!(
+            html.contains("<p>&lt;script&gt;alert(&#x27;xss&#x27;)&lt;/script&gt;</p>")
+                || html.contains("<p>&lt;script&gt;alert('xss')&lt;/script&gt;</p>")
+        );
     }
 }
