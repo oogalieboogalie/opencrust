@@ -821,6 +821,36 @@ async fn setup_whatsapp(
 ) -> Result<Option<ChannelConfig>> {
     println!();
     println!("  WhatsApp Setup");
+    println!();
+
+    let modes = ["WhatsApp Web (QR code - personal)", "WhatsApp Business API"];
+    let mode_idx = Select::new()
+        .with_prompt("Which mode?")
+        .items(&modes)
+        .default(0)
+        .interact()
+        .context("mode selection cancelled")?;
+
+    if mode_idx == 0 {
+        // WhatsApp Web mode - no credentials needed
+        println!();
+        println!("  WhatsApp Web will show a QR code when you start the bot.");
+        println!("  Scan it with your phone to link your personal WhatsApp.");
+        println!("  Requires Node.js to be installed.");
+        println!();
+
+        let mut settings = HashMap::new();
+        settings.insert("mode".to_string(), serde_json::json!("web"));
+
+        return Ok(Some(ChannelConfig {
+            channel_type: "whatsapp".to_string(),
+            enabled: Some(true),
+            settings,
+        }));
+    }
+
+    // WhatsApp Business API mode
+    println!();
     println!("  1. Go to https://developers.facebook.com");
     println!("  2. Create a WhatsApp Business app");
     println!("  3. Get your access token and phone number ID");
@@ -862,6 +892,7 @@ async fn setup_whatsapp(
     println!("  WhatsApp configured (no connection test available).");
 
     let mut settings = HashMap::new();
+    settings.insert("mode".to_string(), serde_json::json!("business"));
     settings.insert("access_token".to_string(), serde_json::json!(access_token));
     if !phone_id.is_empty() {
         settings.insert("phone_number_id".to_string(), serde_json::json!(phone_id));

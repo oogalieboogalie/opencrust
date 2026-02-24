@@ -27,5 +27,7 @@ pub use slack::{SlackChannel, SlackOnMessageFn};
 #[cfg(feature = "telegram")]
 pub use telegram::{MediaAttachment, OnMessageFn, TelegramChannel};
 pub use traits::{Channel, ChannelEvent, ChannelStatus};
+#[cfg(feature = "whatsapp-web")]
+pub use whatsapp::web::WhatsAppWebChannel;
 #[cfg(feature = "whatsapp")]
 pub use whatsapp::{WhatsAppChannel, WhatsAppOnMessageFn};

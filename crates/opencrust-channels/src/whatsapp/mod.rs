@@ -1,4 +1,6 @@
 pub mod api;
+#[cfg(feature = "whatsapp-web")]
+pub mod web;
 pub mod webhook;
 
 use std::future::Future;

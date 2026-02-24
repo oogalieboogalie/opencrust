@@ -2,6 +2,7 @@ use std::path::PathBuf;
 use std::sync::Arc;
 
 use notify::{EventKind, RecursiveMode, Watcher};
+use opencrust_channels::Channel;
 use opencrust_common::{
     ChannelId, Message, MessageContent, MessageDirection, Result, SessionId, UserId,
 };
@@ -16,6 +17,7 @@ use crate::bootstrap::build_imessage_channels;
 use crate::bootstrap::{
     build_agent_runtime, build_channels, build_discord_channels, build_mcp_tools,
     build_slack_channels, build_telegram_channels, build_whatsapp_channels,
+    build_whatsapp_web_channels,
 };
 use crate::router::build_router;
 use crate::state::AppState;
@@ -177,7 +179,7 @@ impl GatewayServer {
             }
         }
 
-        // Build WhatsApp channels (webhook-driven — no persistent connection)
+        // Build WhatsApp Business channels (webhook-driven - no persistent connection)
         let whatsapp_channels = build_whatsapp_channels(&state.config, &state);
         for channel in &whatsapp_channels {
             info!(
@@ -187,6 +189,19 @@ impl GatewayServer {
         }
         let whatsapp_state: opencrust_channels::whatsapp::webhook::WhatsAppState =
             Arc::new(whatsapp_channels);
+
+        // Start WhatsApp Web channels (sidecar-driven, QR code pairing)
+        let whatsapp_web_channels = build_whatsapp_web_channels(&state.config, &state);
+        for mut channel in whatsapp_web_channels {
+            tokio::spawn(async move {
+                if let Err(e) = channel.connect().await {
+                    warn!("whatsapp-web channel failed to connect: {e}");
+                    return;
+                }
+                shutdown_signal().await;
+                channel.disconnect().await.ok();
+            });
+        }
 
         let state_for_shutdown = Arc::clone(&state);
         let app = build_router(state, whatsapp_state);

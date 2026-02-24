@@ -10,7 +10,7 @@ use opencrust_agents::{
 use opencrust_channels::{IMessageChannel, IMessageOnMessageFn};
 use opencrust_channels::{
     MediaAttachment, SlackChannel, SlackOnMessageFn, TelegramChannel, WhatsAppChannel,
-    WhatsAppOnMessageFn,
+    WhatsAppOnMessageFn, WhatsAppWebChannel,
 };
 use opencrust_config::AppConfig;
 use opencrust_db::MemoryStore;
@@ -1716,6 +1716,16 @@ pub fn build_whatsapp_channels(
             continue;
         }
 
+        // Mode detection: explicit "web" mode -> skip (handled by build_whatsapp_web_channels)
+        let mode = channel_config
+            .settings
+            .get("mode")
+            .and_then(|v| v.as_str())
+            .unwrap_or("");
+        if mode == "web" {
+            continue;
+        }
+
         let access_token = channel_config
             .settings
             .get("access_token")
@@ -1726,10 +1736,18 @@ pub fn build_whatsapp_channels(
             .or_else(|| resolve_api_key(None, "WHATSAPP_ACCESS_TOKEN", "WHATSAPP_ACCESS_TOKEN"));
 
         let Some(access_token) = access_token else {
-            warn!(
-                "whatsapp channel '{name}' has no access_token, skipping \
-                 (set access_token in config or WHATSAPP_ACCESS_TOKEN env var)"
-            );
+            // No access_token and no explicit mode - might be a web channel
+            if mode.is_empty() {
+                info!(
+                    "whatsapp channel '{name}' has no access_token and no mode set, \
+                     will try as whatsapp-web"
+                );
+            } else {
+                warn!(
+                    "whatsapp channel '{name}' has no access_token, skipping \
+                     (set access_token in config or WHATSAPP_ACCESS_TOKEN env var)"
+                );
+            }
             continue;
         };
 
@@ -1888,6 +1906,177 @@ pub fn build_whatsapp_channels(
         ));
         channels.push(channel);
         info!("configured whatsapp channel: {name}");
+    }
+
+    channels
+}
+
+/// Build WhatsApp Web channels from config (sidecar-driven, QR code pairing).
+///
+/// Picks up channels where `mode == "web"` or where no `access_token` is set
+/// (auto-detect as web mode).
+pub fn build_whatsapp_web_channels(
+    config: &AppConfig,
+    state: &SharedState,
+) -> Vec<WhatsAppWebChannel> {
+    let mut channels = Vec::new();
+
+    for (name, channel_config) in &config.channels {
+        if channel_config.channel_type != "whatsapp" || channel_config.enabled == Some(false) {
+            continue;
+        }
+
+        let mode = channel_config
+            .settings
+            .get("mode")
+            .and_then(|v| v.as_str())
+            .unwrap_or("");
+
+        let has_access_token = channel_config
+            .settings
+            .get("access_token")
+            .and_then(|v| v.as_str())
+            .is_some()
+            || resolve_api_key(None, "WHATSAPP_ACCESS_TOKEN", "WHATSAPP_ACCESS_TOKEN").is_some();
+
+        // Only build as web if explicitly "web" or no access_token (and not explicitly "business")
+        if mode == "business" {
+            continue;
+        }
+        if mode != "web" && has_access_token {
+            continue;
+        }
+
+        let allowlist = Arc::new(Mutex::new(Allowlist::load_or_create(
+            &default_allowlist_path(),
+        )));
+
+        let pairing = Arc::new(Mutex::new(PairingManager::new(
+            std::time::Duration::from_secs(300),
+        )));
+
+        let state_for_cb = Arc::clone(state);
+        let allowlist_for_cb = Arc::clone(&allowlist);
+        let pairing_for_cb = Arc::clone(&pairing);
+
+        let on_message: WhatsAppOnMessageFn = Arc::new(
+            move |from_jid: String,
+                  user_name: String,
+                  text: String,
+                  delta_tx: Option<tokio::sync::mpsc::Sender<String>>| {
+                let state = Arc::clone(&state_for_cb);
+                let allowlist = Arc::clone(&allowlist_for_cb);
+                let pairing = Arc::clone(&pairing_for_cb);
+                Box::pin(async move {
+                    // Allowlist / pairing check
+                    {
+                        let mut list = allowlist.lock().unwrap();
+                        if list.needs_owner() {
+                            list.claim_owner(&from_jid);
+                            info!(
+                                "whatsapp-web: auto-paired owner {} ({})",
+                                user_name, from_jid
+                            );
+                            return Ok(format!(
+                                "Welcome, {}! You are now the owner of this OpenCrust bot.\n\n\
+                                 Send /pair to generate a code for adding other users.\n\
+                                 Send /help for available commands.",
+                                user_name
+                            ));
+                        }
+
+                        if !list.is_allowed(&from_jid) {
+                            let trimmed = text.trim();
+                            if trimmed.len() == 6 && trimmed.chars().all(|c| c.is_ascii_digit()) {
+                                let claimed = pairing.lock().unwrap().claim(trimmed, &from_jid);
+                                if claimed.is_some() {
+                                    list.add(&from_jid);
+                                    info!(
+                                        "whatsapp-web: paired user {} ({}) via code",
+                                        user_name, from_jid
+                                    );
+                                    return Ok(format!(
+                                        "Welcome, {}! You now have access to this bot.",
+                                        user_name
+                                    ));
+                                }
+                            }
+
+                            warn!(
+                                "whatsapp-web: unauthorized user {} ({})",
+                                user_name, from_jid
+                            );
+                            return Err("__blocked__".to_string());
+                        }
+                    }
+
+                    let session_id = format!("whatsapp-web-{from_jid}");
+
+                    let text = opencrust_security::InputValidator::sanitize(&text);
+                    if opencrust_security::InputValidator::check_prompt_injection(&text) {
+                        return Err(
+                            "input rejected: potential prompt injection detected".to_string()
+                        );
+                    }
+
+                    state
+                        .hydrate_session_history(&session_id, Some("whatsapp-web"), Some(&from_jid))
+                        .await;
+                    let history: Vec<ChatMessage> = state.session_history(&session_id);
+                    let continuity_key = state.continuity_key(Some(&from_jid));
+                    let summary = state.session_summary(&session_id);
+
+                    let (response, new_summary) = if let Some(delta_sender) = delta_tx {
+                        state
+                            .agents
+                            .process_message_streaming_with_context_and_summary(
+                                &session_id,
+                                &text,
+                                &history,
+                                delta_sender,
+                                summary.as_deref(),
+                                continuity_key.as_deref(),
+                                Some(&from_jid),
+                            )
+                            .await
+                    } else {
+                        state
+                            .agents
+                            .process_message_with_context_and_summary(
+                                &session_id,
+                                &text,
+                                &history,
+                                summary.as_deref(),
+                                continuity_key.as_deref(),
+                                Some(&from_jid),
+                            )
+                            .await
+                    }
+                    .map_err(|e| e.to_string())?;
+
+                    if let Some(s) = new_summary {
+                        state.update_session_summary(&session_id, &s);
+                    }
+
+                    state
+                        .persist_turn(
+                            &session_id,
+                            Some("whatsapp-web"),
+                            Some(&from_jid),
+                            &text,
+                            &response,
+                            Some(serde_json::json!({"whatsapp_from": from_jid})),
+                        )
+                        .await;
+
+                    Ok(response)
+                })
+            },
+        );
+
+        let channel = WhatsAppWebChannel::new(on_message);
+        channels.push(channel);
+        info!("configured whatsapp-web channel: {name}");
     }
 
     channels
