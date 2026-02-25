@@ -170,7 +170,14 @@ impl DiscordHandler {
         let cb_text = text.clone();
 
         let callback_handle = tokio::spawn(async move {
-            on_message(cb_channel_id, cb_user_id, cb_user_name, cb_text, Some(delta_tx)).await
+            on_message(
+                cb_channel_id,
+                cb_user_id,
+                cb_user_name,
+                cb_text,
+                Some(delta_tx),
+            )
+            .await
         });
 
         // Accumulate streaming deltas and periodically edit the deferred response.
@@ -361,7 +368,12 @@ impl EventHandler for DiscordHandler {
     ///
     /// Re-joins threads that become active again so the bot continues
     /// receiving messages and maintaining per-thread session history.
-    async fn thread_update(&self, ctx: Context, _old: Option<serenity_model::GuildChannel>, new: serenity_model::GuildChannel) {
+    async fn thread_update(
+        &self,
+        ctx: Context,
+        _old: Option<serenity_model::GuildChannel>,
+        new: serenity_model::GuildChannel,
+    ) {
         // Only act when the thread transitions from archived to active
         let is_archived = new
             .thread_metadata
