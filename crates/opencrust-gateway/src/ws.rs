@@ -274,7 +274,7 @@ async fn process_text_message(
     state: &SharedState,
     sender: &mut futures::stream::SplitSink<WebSocket, Message>,
 ) -> Option<serde_json::Value> {
-    let (user_text, provider_id, model_override) = parse_user_message(text);
+    let (user_text, provider_id, model_override, agent_id) = parse_user_message(text);
 
     // Input validation
     let user_text = opencrust_security::InputValidator::sanitize(&user_text);
@@ -298,7 +298,30 @@ async fn process_text_message(
     let continuity_key = state.continuity_key(None);
     let summary = state.session_summary(session_id);
 
-    // Route through agent runtime (with optional provider override)
+    // Resolve named agent config if agent_id was specified
+    let config = state.current_config();
+    let agent_config = crate::agent_router::resolve(&config, agent_id.as_deref(), Some("web"));
+
+    // Extract overrides from agent config
+    let (effective_provider, effective_model, system_prompt_override, max_tokens_override) =
+        if let Some(ac) = agent_config {
+            (
+                provider_id
+                    .as_deref()
+                    .or(ac.provider.as_deref())
+                    .map(|s| s.to_string()),
+                model_override
+                    .as_deref()
+                    .or(ac.model.as_deref())
+                    .map(|s| s.to_string()),
+                ac.system_prompt.clone(),
+                ac.max_tokens,
+            )
+        } else {
+            (provider_id, model_override, None, None)
+        };
+
+    // Route through agent runtime (with optional provider/agent overrides)
     let reply = match state
         .agents
         .process_message_with_agent_config_and_summary(
@@ -307,10 +330,10 @@ async fn process_text_message(
             &history,
             continuity_key.as_deref(),
             None,
-            provider_id.as_deref(),
-            model_override.as_deref(),
-            None,
-            None,
+            effective_provider.as_deref(),
+            effective_model.as_deref(),
+            system_prompt_override.as_deref(),
+            max_tokens_override,
             summary.as_deref(),
         )
         .await
@@ -372,9 +395,9 @@ fn text_message_too_large(len: usize) -> bool {
     len > MAX_WS_TEXT_BYTES
 }
 
-/// Try to extract `"content"` plus optional `"provider"` and `"model"` from JSON,
+/// Try to extract `"content"` plus optional `"provider"`, `"model"`, and `"agent_id"` from JSON,
 /// otherwise use the raw text as content with no overrides.
-fn parse_user_message(raw: &str) -> (String, Option<String>, Option<String>) {
+fn parse_user_message(raw: &str) -> (String, Option<String>, Option<String>, Option<String>) {
     if let Ok(v) = serde_json::from_str::<serde_json::Value>(raw)
         && let Some(text) = v.get("content").and_then(|c| c.as_str())
     {
@@ -389,9 +412,14 @@ fn parse_user_message(raw: &str) -> (String, Option<String>, Option<String>) {
             .map(str::trim)
             .filter(|s| !s.is_empty())
             .map(|s| s.to_string());
-        return (text.to_string(), provider, model);
+        let agent_id = v
+            .get("agent_id")
+            .and_then(|a| a.as_str())
+            .filter(|s| !s.is_empty())
+            .map(|s| s.to_string());
+        return (text.to_string(), provider, model, agent_id);
     }
-    (raw.to_string(), None, None)
+    (raw.to_string(), None, None, None)
 }
 
 #[cfg(test)]
@@ -424,35 +452,49 @@ mod tests {
     #[test]
     fn parse_user_message_extracts_provider() {
         let json = r#"{"content": "hello", "provider": "anthropic"}"#;
-        let (text, provider, model) = parse_user_message(json);
+        let (text, provider, model, agent_id) = parse_user_message(json);
         assert_eq!(text, "hello");
         assert_eq!(provider, Some("anthropic".to_string()));
         assert_eq!(model, None);
+        assert_eq!(agent_id, None);
     }
 
     #[test]
     fn parse_user_message_extracts_provider_and_model() {
         let json = r#"{"content": "hello", "provider": "ollama", "model": "kimi"}"#;
-        let (text, provider, model) = parse_user_message(json);
+        let (text, provider, model, agent_id) = parse_user_message(json);
         assert_eq!(text, "hello");
         assert_eq!(provider, Some("ollama".to_string()));
         assert_eq!(model, Some("kimi".to_string()));
+        assert_eq!(agent_id, None);
     }
 
     #[test]
     fn parse_user_message_no_provider() {
         let json = r#"{"content": "hello"}"#;
-        let (text, provider, model) = parse_user_message(json);
+        let (text, provider, model, agent_id) = parse_user_message(json);
         assert_eq!(text, "hello");
         assert_eq!(provider, None);
         assert_eq!(model, None);
+        assert_eq!(agent_id, None);
     }
 
     #[test]
     fn parse_user_message_plain_text() {
-        let (text, provider, model) = parse_user_message("just plain text");
+        let (text, provider, model, agent_id) = parse_user_message("just plain text");
         assert_eq!(text, "just plain text");
         assert_eq!(provider, None);
         assert_eq!(model, None);
+        assert_eq!(agent_id, None);
+    }
+
+    #[test]
+    fn parse_user_message_extracts_agent_id() {
+        let json = r#"{"content": "hello", "agent_id": "helper"}"#;
+        let (text, provider, model, agent_id) = parse_user_message(json);
+        assert_eq!(text, "hello");
+        assert_eq!(provider, None);
+        assert_eq!(model, None);
+        assert_eq!(agent_id, Some("helper".to_string()));
     }
 }

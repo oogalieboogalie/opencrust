@@ -27,6 +27,7 @@ const authConnectBtn = document.getElementById("auth-connect");
 const updateBanner = document.getElementById("update-banner");
 const updateBannerText = document.getElementById("update-banner-text");
 const updateBannerClose = document.getElementById("update-banner-close");
+const agentSelect = document.getElementById("agent-select");
 
 const storageKey = "opencrust.session_id";
 const keyStorage = "opencrust.gateway_key";
@@ -747,6 +748,8 @@ function sendMessage() {
   if (pid) msg.provider = pid;
   const model = providerModelInput.value.trim();
   if (model) msg.model = model;
+  const agent = agentSelect ? agentSelect.value : "";
+  if (agent) msg.agent_id = agent;
   socket.send(JSON.stringify(msg));
   inputEl.value = "";
   inputEl.focus();
@@ -801,17 +804,20 @@ if (themeToggleBtn) {
 const navItems = {
   chat: document.getElementById("nav-chat"),
   mcps: document.getElementById("nav-mcps"),
+  agent: document.getElementById("nav-agent"),
+  sessions: document.getElementById("nav-sessions"),
   integrations: document.getElementById("nav-integrations")
 };
 
 const views = {
   chat: document.getElementById("view-chat"),
   mcps: document.getElementById("view-mcps"),
+  agent: document.getElementById("view-agent"),
+  sessions: document.getElementById("view-sessions"),
   integrations: document.getElementById("view-integrations")
 };
 
 function switchView(viewId) {
-  // Update nav active states
   Object.entries(navItems).forEach(([id, el]) => {
     if (id === viewId) {
       el.classList.add("active");
@@ -820,7 +826,6 @@ function switchView(viewId) {
     }
   });
 
-  // Update view visibility
   Object.entries(views).forEach(([id, el]) => {
     if (id === viewId) {
       el.style.display = "";
@@ -835,6 +840,16 @@ navItems.mcps.addEventListener("click", () => {
   switchView("mcps");
   loadMcpServers();
 });
+navItems.agent.addEventListener("click", () => {
+  switchView("agent");
+  loadAgentConfig();
+});
+navItems.sessions.addEventListener("click", () => {
+  switchView("sessions");
+  loadSessions();
+});
+
+// ── MCP Server Inspection ──
 
 async function loadMcpServers() {
   const list = document.getElementById("mcps-list");
@@ -849,18 +864,229 @@ async function loadMcpServers() {
     list.innerHTML = servers.map(s => {
       const statusClass = s.connected ? "online" : "offline";
       const statusText = s.connected ? "Connected" : "Disconnected";
-      return `<div class="card">
-        <div class="card-header">
-          <h3 class="card-title">${s.name}</h3>
+      return `<div class="card mcp-card" data-server="${escapeHtml(s.name)}">
+        <div class="card-header" style="cursor:pointer;">
+          <h3 class="card-title">${escapeHtml(s.name)}</h3>
           <span class="pill ${statusClass}">${statusText}</span>
         </div>
-        <div class="card-meta">${s.tools} tool${s.tools !== 1 ? "s" : ""} registered</div>
+        <div class="card-meta">${s.tools} tool${s.tools !== 1 ? "s" : ""} registered &mdash; click to inspect</div>
+        <div class="mcp-detail" style="display:none;"></div>
       </div>`;
     }).join("");
+
+    // Attach click handlers for inspection
+    list.querySelectorAll(".mcp-card .card-header").forEach(header => {
+      header.addEventListener("click", () => {
+        const card = header.closest(".mcp-card");
+        const detail = card.querySelector(".mcp-detail");
+        if (detail.style.display === "none") {
+          detail.style.display = "";
+          loadMcpDetail(card.dataset.server, detail);
+        } else {
+          detail.style.display = "none";
+        }
+      });
+    });
   } catch (e) {
     list.innerHTML = '<p style="color:var(--text-secondary)">Failed to load MCP servers.</p>';
   }
 }
+
+async function loadMcpDetail(serverName, container) {
+  container.innerHTML = '<p style="color:var(--text-secondary);padding:8px 0;">Loading...</p>';
+  try {
+    const resp = await fetch(`/api/mcp/${encodeURIComponent(serverName)}`);
+    const data = await resp.json();
+    const tools = data.tools || [];
+    const resources = data.resources || [];
+    const prompts = data.prompts || [];
+
+    let html = "";
+
+    if (tools.length > 0) {
+      html += `<div class="mcp-section"><h4>Tools (${tools.length})</h4>`;
+      html += tools.map(t => `<div class="mcp-item">
+        <strong>${escapeHtml(t.name)}</strong>
+        <div style="color:var(--text-secondary);font-size:0.85em;">${escapeHtml(t.description || "No description")}</div>
+      </div>`).join("");
+      html += `</div>`;
+    }
+
+    if (resources.length > 0) {
+      html += `<div class="mcp-section"><h4>Resources (${resources.length})</h4>`;
+      html += resources.map(r => `<div class="mcp-item">
+        <strong>${escapeHtml(r.name)}</strong>
+        <div style="color:var(--text-secondary);font-size:0.85em;">${escapeHtml(r.uri)}${r.mime_type ? ` (${escapeHtml(r.mime_type)})` : ""}</div>
+      </div>`).join("");
+      html += `</div>`;
+    }
+
+    if (prompts.length > 0) {
+      html += `<div class="mcp-section"><h4>Prompts (${prompts.length})</h4>`;
+      html += prompts.map(p => {
+        const args = (p.arguments || []).map(a =>
+          `<span style="margin-left:12px;font-size:0.85em;">${escapeHtml(a.name)}${a.required ? " (required)" : ""}</span>`
+        ).join("<br>");
+        return `<div class="mcp-item">
+          <strong>${escapeHtml(p.name)}</strong>
+          <div style="color:var(--text-secondary);font-size:0.85em;">${escapeHtml(p.description || "")}</div>
+          ${args ? `<div>${args}</div>` : ""}
+        </div>`;
+      }).join("");
+      html += `</div>`;
+    }
+
+    if (!html) {
+      html = '<p style="color:var(--text-secondary);padding:4px 0;">No tools, resources, or prompts found.</p>';
+    }
+
+    container.innerHTML = html;
+  } catch (e) {
+    container.innerHTML = '<p style="color:var(--text-secondary)">Failed to inspect server.</p>';
+  }
+}
+
+// ── Agent Config View ──
+
+async function loadAgentConfig() {
+  const editor = document.getElementById("system-prompt-editor");
+  const saveBtn = document.getElementById("system-prompt-save");
+  const feedback = document.getElementById("system-prompt-feedback");
+  const infoBody = document.getElementById("agent-info-body");
+  const agentsList = document.getElementById("named-agents-list");
+
+  try {
+    const resp = await fetch("/api/config/agent");
+    const data = await resp.json();
+
+    editor.value = data.system_prompt || "";
+
+    const info = [];
+    if (data.default_provider) info.push(`Provider: ${data.default_provider}`);
+    if (data.max_tokens) info.push(`Max tokens: ${data.max_tokens}`);
+    if (data.max_context_tokens) info.push(`Context window: ${data.max_context_tokens}`);
+    info.push(`Memory: ${data.memory_enabled ? "enabled" : "disabled"}`);
+    if (data.memory_enabled) {
+      info.push(`Recall limit: ${data.recall_limit || "default"}`);
+      info.push(`Summarization: ${data.summarization ? "on" : "off"}`);
+    }
+    infoBody.innerHTML = info.map(i => `<div>${escapeHtml(i)}</div>`).join("");
+  } catch (e) {
+    infoBody.textContent = "Failed to load agent config.";
+  }
+
+  // Load named agents
+  try {
+    const resp = await fetch("/api/agents");
+    const data = await resp.json();
+    const agents = data.agents || [];
+    if (agents.length === 0) {
+      agentsList.innerHTML = "No named agents configured. Add agents to config.yml.";
+    } else {
+      agentsList.innerHTML = agents.map(a => {
+        const details = [];
+        if (a.provider) details.push(`provider: ${escapeHtml(a.provider)}`);
+        if (a.model) details.push(`model: ${escapeHtml(a.model)}`);
+        if (a.max_tokens) details.push(`max_tokens: ${a.max_tokens}`);
+        if (a.tools && a.tools.length > 0) details.push(`tools: ${a.tools.join(", ")}`);
+        if (a.has_system_prompt) details.push("custom system prompt");
+        return `<div style="margin-bottom:6px;"><strong>${escapeHtml(a.name)}</strong>${details.length ? ` &mdash; ${details.join(", ")}` : ""}</div>`;
+      }).join("");
+    }
+  } catch (e) {
+    agentsList.textContent = "Failed to load agents.";
+  }
+
+  // Save handler
+  if (saveBtn && !saveBtn.dataset.bound) {
+    saveBtn.dataset.bound = "1";
+    saveBtn.addEventListener("click", async () => {
+      feedback.textContent = "Saving...";
+      try {
+        const r = await fetch("/api/config/agent", {
+          method: "PUT",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ system_prompt: editor.value || null }),
+        });
+        if (r.ok) {
+          feedback.textContent = "Saved.";
+        } else {
+          feedback.textContent = "Failed to save.";
+        }
+      } catch (e) {
+        feedback.textContent = `Error: ${e}`;
+      }
+      setTimeout(() => { feedback.textContent = ""; }, 3000);
+    });
+  }
+}
+
+// ── Sessions View ──
+
+async function loadSessions() {
+  const list = document.getElementById("sessions-list");
+  try {
+    const resp = await fetch("/api/sessions");
+    const data = await resp.json();
+    const sessions = data.sessions || [];
+    if (sessions.length === 0) {
+      list.innerHTML = '<p style="color:var(--text-secondary)">No active sessions.</p>';
+      return;
+    }
+    list.innerHTML = sessions.map(s => {
+      const isCurrent = s.session_id === sessionId;
+      const statusClass = s.connected ? "online" : "offline";
+      const statusText = s.connected ? "Connected" : "Disconnected";
+      return `<div class="card session-card${isCurrent ? " current-session" : ""}" data-session-id="${escapeHtml(s.session_id)}" style="cursor:pointer;">
+        <div class="card-header">
+          <h3 class="card-title" style="font-family:monospace;font-size:0.9em;">${escapeHtml(s.session_id.slice(0, 12))}...</h3>
+          <span class="pill ${statusClass}">${statusText}</span>
+        </div>
+        <div class="card-meta">
+          ${s.channel_id ? `Channel: ${escapeHtml(s.channel_id)} &mdash; ` : ""}${s.history_length || 0} messages${isCurrent ? " (current)" : ""}
+        </div>
+      </div>`;
+    }).join("");
+
+    // Click to resume session
+    list.querySelectorAll(".session-card").forEach(card => {
+      card.addEventListener("click", () => {
+        const sid = card.dataset.sessionId;
+        if (sid === sessionId) return;
+        setSession(sid);
+        chatEl.querySelectorAll(".msg").forEach(m => m.remove());
+        reconnectFresh();
+        switchView("chat");
+        appendMessage("sys", `Switched to session ${sid.slice(0, 8)}...`);
+      });
+    });
+  } catch (e) {
+    list.innerHTML = '<p style="color:var(--text-secondary)">Failed to load sessions.</p>';
+  }
+}
+
+// ── Agent Selector (topbar dropdown) ──
+
+async function loadAgents() {
+  if (!agentSelect) return;
+  try {
+    const resp = await fetch("/api/agents");
+    const data = await resp.json();
+    const agents = data.agents || [];
+    agentSelect.innerHTML = '<option value="">(default agent)</option>';
+    for (const a of agents) {
+      const opt = document.createElement("option");
+      opt.value = a.name;
+      opt.textContent = a.name;
+      agentSelect.appendChild(opt);
+    }
+    // Hide selector if no named agents
+    agentSelect.style.display = agents.length === 0 ? "none" : "";
+  } catch {
+    agentSelect.style.display = "none";
+  }
+}
+
 navItems.integrations.addEventListener("click", async () => {
   switchView("integrations");
   if (integrationsView) await integrationsView.load();
@@ -880,6 +1106,7 @@ async function boot() {
   setConnectionState(false);
   setSession(sessionId);
   refreshStatus();
+  loadAgents();
 
   try {
     const r = await fetch("/api/auth-check");

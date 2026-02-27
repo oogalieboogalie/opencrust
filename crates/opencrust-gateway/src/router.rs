@@ -100,6 +100,12 @@ pub fn build_router(
             get(handle_google_integration_callback),
         )
         .route("/api/mcp", get(list_mcp_servers))
+        .route("/api/mcp/{name}", get(inspect_mcp_server))
+        .route("/api/agents", get(list_agents))
+        .route(
+            "/api/config/agent",
+            get(get_agent_config).put(update_agent_config),
+        )
         // A2A protocol endpoints
         .route("/.well-known/agent.json", get(a2a::agent_card))
         .route("/a2a/tasks", post(a2a::create_task))
@@ -1508,6 +1514,129 @@ async fn list_mcp_servers(
     };
 
     axum::Json(serde_json::json!({ "servers": servers }))
+}
+
+/// GET /api/mcp/{name} — inspect a specific MCP server's tools, resources, and prompts.
+async fn inspect_mcp_server(
+    axum::extract::State(state): axum::extract::State<SharedState>,
+    axum::extract::Path(name): axum::extract::Path<String>,
+) -> axum::Json<serde_json::Value> {
+    let Some(mgr) = &state.mcp_manager_arc else {
+        return axum::Json(serde_json::json!({
+            "error": "no MCP manager configured"
+        }));
+    };
+
+    let tools: Vec<serde_json::Value> = mgr
+        .tool_info(&name)
+        .await
+        .into_iter()
+        .map(|t| {
+            serde_json::json!({
+                "name": t.name,
+                "description": t.description,
+                "input_schema": t.input_schema,
+            })
+        })
+        .collect();
+
+    let resources: Vec<serde_json::Value> = mgr
+        .list_resources(&name)
+        .await
+        .unwrap_or_default()
+        .into_iter()
+        .map(|r| {
+            serde_json::json!({
+                "uri": r.uri,
+                "name": r.name,
+                "description": r.description,
+                "mime_type": r.mime_type,
+            })
+        })
+        .collect();
+
+    let prompts: Vec<serde_json::Value> = mgr
+        .list_prompts(&name)
+        .await
+        .unwrap_or_default()
+        .into_iter()
+        .map(|p| {
+            serde_json::json!({
+                "name": p.name,
+                "description": p.description,
+                "arguments": p.arguments.iter().map(|a| serde_json::json!({
+                    "name": a.name,
+                    "description": a.description,
+                    "required": a.required,
+                })).collect::<Vec<_>>(),
+            })
+        })
+        .collect();
+
+    axum::Json(serde_json::json!({
+        "name": name,
+        "tools": tools,
+        "resources": resources,
+        "prompts": prompts,
+    }))
+}
+
+/// GET /api/agents — list configured named agents.
+async fn list_agents(
+    axum::extract::State(state): axum::extract::State<SharedState>,
+) -> axum::Json<serde_json::Value> {
+    let config = state.current_config();
+    let agents: Vec<serde_json::Value> = config
+        .agents
+        .iter()
+        .map(|(name, ac)| {
+            serde_json::json!({
+                "name": name,
+                "provider": ac.provider,
+                "model": ac.model,
+                "has_system_prompt": ac.system_prompt.is_some(),
+                "max_tokens": ac.max_tokens,
+                "tools": ac.tools,
+            })
+        })
+        .collect();
+
+    axum::Json(serde_json::json!({ "agents": agents }))
+}
+
+/// GET /api/config/agent — return the current agent runtime configuration.
+async fn get_agent_config(
+    axum::extract::State(state): axum::extract::State<SharedState>,
+) -> axum::Json<serde_json::Value> {
+    let config = state.current_config();
+    let system_prompt = state.agents.system_prompt();
+
+    axum::Json(serde_json::json!({
+        "system_prompt": system_prompt,
+        "default_provider": config.agent.default_provider,
+        "max_tokens": config.agent.max_tokens,
+        "max_context_tokens": config.agent.max_context_tokens,
+        "memory_enabled": config.memory.enabled,
+        "recall_limit": config.memory.recall_limit,
+        "summarization": config.memory.summarization,
+    }))
+}
+
+/// PUT /api/config/agent — update runtime agent settings (system prompt).
+async fn update_agent_config(
+    axum::extract::State(state): axum::extract::State<SharedState>,
+    axum::Json(body): axum::Json<serde_json::Value>,
+) -> axum::Json<serde_json::Value> {
+    if let Some(prompt) = body.get("system_prompt") {
+        let new_prompt = if prompt.is_null() {
+            None
+        } else {
+            prompt.as_str().map(|s| s.to_string())
+        };
+        state.agents.set_system_prompt(new_prompt);
+    }
+
+    axum::Json(serde_json::json!({ "ok": true }))
 }
 
 /// Read the cached latest version from ~/.opencrust/update-check.json.

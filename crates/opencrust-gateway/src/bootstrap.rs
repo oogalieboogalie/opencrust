@@ -459,7 +459,7 @@ pub fn build_agent_runtime(config: &AppConfig) -> AgentRuntime {
 
     // --- Agent Config ---
     if let Some(prompt) = &config.agent.system_prompt {
-        runtime.set_system_prompt(prompt.clone());
+        runtime.set_system_prompt(Some(prompt.clone()));
     }
     if let Some(max_tokens) = config.agent.max_tokens {
         runtime.set_max_tokens(max_tokens);
@@ -500,7 +500,7 @@ pub fn build_agent_runtime(config: &AppConfig) -> AgentRuntime {
                 Some(existing) => format!("{existing}{skill_block}"),
                 None => skill_block,
             };
-            runtime.set_system_prompt(new_prompt);
+            runtime.set_system_prompt(Some(new_prompt));
             info!("injected {} skill(s) into system prompt", skills.len());
         }
         Ok(_) => {} // no skills found

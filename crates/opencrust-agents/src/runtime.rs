@@ -24,7 +24,7 @@ pub struct AgentRuntime {
     memory: Option<Arc<dyn MemoryProvider>>,
     embeddings: Option<Arc<dyn EmbeddingProvider>>,
     tools: Vec<Box<dyn Tool>>,
-    system_prompt: Option<String>,
+    system_prompt: RwLock<Option<String>>,
     dna_content: RwLock<Option<String>>,
     max_tokens: Option<u32>,
     max_context_tokens: Option<usize>,
@@ -40,7 +40,7 @@ impl AgentRuntime {
             memory: None,
             embeddings: None,
             tools: Vec::new(),
-            system_prompt: None,
+            system_prompt: RwLock::new(None),
             dna_content: RwLock::new(None),
             max_tokens: None,
             max_context_tokens: None,
@@ -49,12 +49,14 @@ impl AgentRuntime {
         }
     }
 
-    pub fn system_prompt(&self) -> Option<&str> {
-        self.system_prompt.as_deref()
+    pub fn system_prompt(&self) -> Option<String> {
+        self.system_prompt.read().unwrap().clone()
     }
 
-    pub fn set_system_prompt(&mut self, prompt: String) {
-        self.system_prompt = Some(prompt);
+    /// Set the system prompt at runtime. Uses `&self` via RwLock
+    /// so it works after Arc wrapping for hot-reload from the web UI.
+    pub fn set_system_prompt(&self, prompt: Option<String>) {
+        *self.system_prompt.write().unwrap() = prompt;
     }
 
     /// Set the DNA content (personality/tone from dna.md). Uses `&self` via RwLock
@@ -483,7 +485,7 @@ impl AgentRuntime {
 
         let effective_system_prompt = system_prompt_override
             .map(|s| s.to_string())
-            .or_else(|| self.system_prompt.clone());
+            .or_else(|| self.system_prompt.read().unwrap().clone());
         let effective_model = model_override
             .map(str::trim)
             .filter(|m| !m.is_empty())
@@ -625,7 +627,7 @@ impl AgentRuntime {
 
         let effective_system_prompt = system_prompt_override
             .map(|s| s.to_string())
-            .or_else(|| self.system_prompt.clone());
+            .or_else(|| self.system_prompt.read().unwrap().clone());
         let effective_model = model_override
             .map(str::trim)
             .filter(|m| !m.is_empty())
@@ -803,12 +805,9 @@ impl AgentRuntime {
         };
 
         let dna = self.dna_content();
-        let system = build_system_prompt(
-            dna.as_deref(),
-            &self.system_prompt,
-            memory_context.as_deref(),
-            None,
-        );
+        let sys_prompt = self.system_prompt.read().unwrap().clone();
+        let system =
+            build_system_prompt(dna.as_deref(), &sys_prompt, memory_context.as_deref(), None);
 
         let tool_defs = self.tool_definitions();
 
@@ -1008,12 +1007,9 @@ impl AgentRuntime {
         };
 
         let dna = self.dna_content();
-        let system = build_system_prompt(
-            dna.as_deref(),
-            &self.system_prompt,
-            memory_context.as_deref(),
-            None,
-        );
+        let sys_prompt = self.system_prompt.read().unwrap().clone();
+        let system =
+            build_system_prompt(dna.as_deref(), &sys_prompt, memory_context.as_deref(), None);
 
         let tool_defs = self.tool_definitions();
 
@@ -1267,9 +1263,10 @@ impl AgentRuntime {
         };
 
         let dna = self.dna_content();
+        let sys_prompt = self.system_prompt.read().unwrap().clone();
         let system = build_system_prompt(
             dna.as_deref(),
-            &self.system_prompt,
+            &sys_prompt,
             memory_context.as_deref(),
             session_summary,
         );
@@ -1298,7 +1295,7 @@ impl AgentRuntime {
         let system = if new_summary.is_some() {
             build_system_prompt(
                 dna.as_deref(),
-                &self.system_prompt,
+                &sys_prompt,
                 memory_context.as_deref(),
                 new_summary.as_deref(),
             )
@@ -1423,9 +1420,10 @@ impl AgentRuntime {
         };
 
         let dna = self.dna_content();
+        let sys_prompt = self.system_prompt.read().unwrap().clone();
         let system = build_system_prompt(
             dna.as_deref(),
-            &self.system_prompt,
+            &sys_prompt,
             memory_context.as_deref(),
             session_summary,
         );
@@ -1453,7 +1451,7 @@ impl AgentRuntime {
         let system = if new_summary.is_some() {
             build_system_prompt(
                 dna.as_deref(),
-                &self.system_prompt,
+                &sys_prompt,
                 memory_context.as_deref(),
                 new_summary.as_deref(),
             )
