@@ -2467,6 +2467,42 @@ mod tests {
         assert_eq!(fallback_calls.load(Ordering::SeqCst), 0);
     }
 
+    #[tokio::test]
+    async fn process_message_returns_last_error_when_all_providers_fail() {
+        let runtime = AgentRuntime::new();
+
+        let primary_calls = Arc::new(AtomicUsize::new(0));
+        let fallback_calls = Arc::new(AtomicUsize::new(0));
+
+        runtime.register_provider(Arc::new(StaticMockProvider {
+            id: "primary",
+            fail_with: Some("openai API error: status=500, body=internal error"),
+            output: "",
+            calls: Arc::clone(&primary_calls),
+        }));
+        runtime.register_provider(Arc::new(StaticMockProvider {
+            id: "backup",
+            fail_with: Some("anthropic API error: status=503, body=overloaded"),
+            output: "",
+            calls: Arc::clone(&fallback_calls),
+        }));
+        assert!(runtime.set_default_provider_id("primary"));
+        runtime.set_fallback_provider_ids(&["backup".to_string()]);
+
+        let err = runtime
+            .process_message("session-1", "hello", &[])
+            .await
+            .expect_err("should fail when all providers are exhausted");
+
+        // The last provider's error should be returned
+        assert!(
+            err.to_string().contains("status=503"),
+            "expected last provider error, got: {err}"
+        );
+        assert_eq!(primary_calls.load(Ordering::SeqCst), 1);
+        assert_eq!(fallback_calls.load(Ordering::SeqCst), 1);
+    }
+
     #[test]
     fn estimate_tokens_basic() {
         let messages = vec![make_msg(ChatRole::User, "hello world")]; // 11 chars

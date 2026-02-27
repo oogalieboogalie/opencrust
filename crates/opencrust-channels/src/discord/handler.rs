@@ -199,7 +199,13 @@ impl DiscordHandler {
             {
                 let formatted = convert::to_discord_markdown(&accumulated);
                 let chunks = convert::split_discord_chunks(&formatted);
-                let display = chunks.first().cloned().unwrap_or_default();
+                let mut display = chunks.first().cloned().unwrap_or_default();
+                if chunks.len() > 1 {
+                    // Truncate with indicator so the user knows more content is coming
+                    let suffix = "\n\n...";
+                    display.truncate(convert::DISCORD_MESSAGE_CHAR_LIMIT - suffix.len());
+                    display.push_str(suffix);
+                }
                 let _ = command
                     .edit_response(
                         &ctx.http,
@@ -371,17 +377,22 @@ impl EventHandler for DiscordHandler {
     async fn thread_update(
         &self,
         ctx: Context,
-        _old: Option<serenity_model::GuildChannel>,
+        old: Option<serenity_model::GuildChannel>,
         new: serenity_model::GuildChannel,
     ) {
         // Only act when the thread transitions from archived to active
+        let was_archived = old
+            .as_ref()
+            .and_then(|o| o.thread_metadata.as_ref())
+            .map(|m| m.archived)
+            .unwrap_or(true);
         let is_archived = new
             .thread_metadata
             .as_ref()
             .map(|m| m.archived)
             .unwrap_or(false);
 
-        if !is_archived {
+        if was_archived && !is_archived {
             tracing::debug!(
                 thread_id = %new.id,
                 thread_name = %new.name,
