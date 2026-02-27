@@ -45,7 +45,7 @@
           <circle cx="12" cy="12" r="3"></circle>
           <path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83-2.83l.06-.06A1.65 1.65 0 0 0 4.68 15a1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 2.83-2.83l.06.06A1.65 1.65 0 0 0 9 4.68a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 2.83l-.06.06A1.65 1.65 0 0 0 19.4 9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z"></path>
         </svg>
-        Agent Config
+        Agent
       </div>
 
       <div class="nav-item" id="nav-sessions">
@@ -134,32 +134,26 @@
         <!-- Agent Config View -->
         <section class="panel panel-view" id="view-agent" style="display: none;">
           <div class="settings-header">
-            <h2>Agent Configuration</h2>
+            <h2>Agent</h2>
           </div>
           <div class="settings-body" id="agent-config-body">
             <div class="card">
               <div class="card-header">
                 <h3 class="card-title">System Prompt</h3>
               </div>
-              <div class="card-meta">The instructions given to the agent before every conversation.</div>
+              <div class="card-meta">Tell the agent who it is and how it should behave. This is sent at the start of every conversation.</div>
               <textarea id="system-prompt-editor" rows="12"
-                placeholder="Enter a system prompt..." style="width:100%;font-family:inherit;resize:vertical;margin-top:8px;padding:8px;border:1px solid var(--border);border-radius:6px;background:var(--surface);color:var(--ink);"></textarea>
+                placeholder="e.g. You are a helpful assistant that specializes in..." style="width:100%;font-family:inherit;resize:vertical;margin-top:8px;padding:8px;border:1px solid var(--border);border-radius:6px;background:var(--surface);color:var(--ink);box-sizing:border-box;"></textarea>
               <div style="margin-top:8px;display:flex;gap:8px;align-items:center;">
                 <button id="system-prompt-save" class="primary">Save</button>
                 <span id="system-prompt-feedback" style="color:var(--text-secondary);font-size:0.85em;"></span>
               </div>
             </div>
-            <div class="card" id="agent-info-card" style="margin-top:12px;">
+            <div class="card" style="margin-top:12px;">
               <div class="card-header">
-                <h3 class="card-title">Runtime Settings</h3>
+                <h3 class="card-title">Current Settings</h3>
               </div>
-              <div id="agent-info-body" class="card-meta">Loading...</div>
-            </div>
-            <div class="card" id="named-agents-card" style="margin-top:12px;">
-              <div class="card-header">
-                <h3 class="card-title">Named Agents</h3>
-              </div>
-              <div id="named-agents-list" class="card-meta">Loading...</div>
+              <div id="agent-info-body" class="card-meta" style="line-height:1.8;"></div>
             </div>
           </div>
         </section>

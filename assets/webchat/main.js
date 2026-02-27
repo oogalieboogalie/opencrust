@@ -953,7 +953,6 @@ async function loadAgentConfig() {
   const saveBtn = document.getElementById("system-prompt-save");
   const feedback = document.getElementById("system-prompt-feedback");
   const infoBody = document.getElementById("agent-info-body");
-  const agentsList = document.getElementById("named-agents-list");
 
   try {
     const resp = await fetch("/api/config/agent");
@@ -961,40 +960,23 @@ async function loadAgentConfig() {
 
     editor.value = data.system_prompt || "";
 
-    const info = [];
-    if (data.default_provider) info.push(`Provider: ${data.default_provider}`);
-    if (data.max_tokens) info.push(`Max tokens: ${data.max_tokens}`);
-    if (data.max_context_tokens) info.push(`Context window: ${data.max_context_tokens}`);
-    info.push(`Memory: ${data.memory_enabled ? "enabled" : "disabled"}`);
+    // Always show something useful
+    const rows = [];
+    const provider = providerData.find(p => p.is_default);
+    rows.push(`<div><strong>Provider:</strong> ${escapeHtml(provider ? provider.display_name : data.default_provider || "not set")}</div>`);
+    if (provider && provider.model) {
+      rows.push(`<div><strong>Model:</strong> ${escapeHtml(provider.model)}</div>`);
+    }
+    rows.push(`<div><strong>Max tokens:</strong> ${data.max_tokens || "default (4096)"}</div>`);
+    rows.push(`<div><strong>Context window:</strong> ${data.max_context_tokens || "default (100k)"}</div>`);
+    rows.push(`<div><strong>Memory:</strong> ${data.memory_enabled ? "on" : "off"}</div>`);
     if (data.memory_enabled) {
-      info.push(`Recall limit: ${data.recall_limit || "default"}`);
-      info.push(`Summarization: ${data.summarization ? "on" : "off"}`);
+      rows.push(`<div><strong>Recall limit:</strong> ${data.recall_limit || 10}</div>`);
+      rows.push(`<div><strong>Summarization:</strong> ${data.summarization ? "on" : "off"}</div>`);
     }
-    infoBody.innerHTML = info.map(i => `<div>${escapeHtml(i)}</div>`).join("");
+    infoBody.innerHTML = rows.join("");
   } catch (e) {
-    infoBody.textContent = "Failed to load agent config.";
-  }
-
-  // Load named agents
-  try {
-    const resp = await fetch("/api/agents");
-    const data = await resp.json();
-    const agents = data.agents || [];
-    if (agents.length === 0) {
-      agentsList.innerHTML = "No named agents configured. Add agents to config.yml.";
-    } else {
-      agentsList.innerHTML = agents.map(a => {
-        const details = [];
-        if (a.provider) details.push(`provider: ${escapeHtml(a.provider)}`);
-        if (a.model) details.push(`model: ${escapeHtml(a.model)}`);
-        if (a.max_tokens) details.push(`max_tokens: ${a.max_tokens}`);
-        if (a.tools && a.tools.length > 0) details.push(`tools: ${a.tools.join(", ")}`);
-        if (a.has_system_prompt) details.push("custom system prompt");
-        return `<div style="margin-bottom:6px;"><strong>${escapeHtml(a.name)}</strong>${details.length ? ` &mdash; ${details.join(", ")}` : ""}</div>`;
-      }).join("");
-    }
-  } catch (e) {
-    agentsList.textContent = "Failed to load agents.";
+    infoBody.innerHTML = "<div>Could not load settings. Make sure the server is running.</div>";
   }
 
   // Save handler
