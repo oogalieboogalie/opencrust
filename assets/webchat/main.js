@@ -15,6 +15,7 @@ const channelListEl = document.getElementById("channel-list");
 const providerSelect = document.getElementById("provider-select");
 const providerStatus = document.getElementById("provider-status");
 const providerModelInput = document.getElementById("provider-model-input");
+const providerBaseUrlInput = document.getElementById("provider-base-url-input");
 const providerModelOptions = document.getElementById("provider-model-options");
 const providerModelStatus = document.getElementById("provider-model-status");
 const providerKeySection = document.getElementById("provider-key-section");
@@ -609,6 +610,14 @@ providerActivateBtn.addEventListener("click", async () => {
   try {
     const payload = { provider_type: id, api_key: key, set_default: true };
     if (model) payload.model = model;
+    const baseUrl = providerBaseUrlInput.value.trim();
+    if (baseUrl) {
+      if (!baseUrl.startsWith("http://") && !baseUrl.startsWith("https://")) {
+        providerStatus.textContent = "Base URL must start with http:// or https://";
+        return;
+      }
+      payload.base_url = baseUrl;
+    }
     const r = await fetch("/api/providers", {
       method: "POST",
       headers: { "Content-Type": "application/json" },

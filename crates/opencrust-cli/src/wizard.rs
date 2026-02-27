@@ -15,8 +15,11 @@ use tracing::info;
 #[derive(Default, Debug)]
 struct DetectedKeys {
     anthropic_api_key: Option<String>,
+    anthropic_base_url: Option<String>,
     openai_api_key: Option<String>,
+    openai_base_url: Option<String>,
     sansa_api_key: Option<String>,
+    sansa_base_url: Option<String>,
     telegram_bot_token: Option<String>,
     discord_bot_token: Option<String>,
     discord_app_id: Option<String>,
@@ -61,14 +64,27 @@ impl DetectedKeys {
             _ => None,
         }
     }
+
+    /// Return the base URL for the given provider, if set in environment.
+    fn base_url_for_provider(&self, provider: &str) -> Option<&str> {
+        match provider {
+            "anthropic" => self.anthropic_base_url.as_deref(),
+            "openai" => self.openai_base_url.as_deref(),
+            "sansa" => self.sansa_base_url.as_deref(),
+            _ => None,
+        }
+    }
 }
 
 fn detect_env_keys() -> DetectedKeys {
     let get = |name: &str| std::env::var(name).ok().filter(|v| !v.is_empty());
     DetectedKeys {
         anthropic_api_key: get("ANTHROPIC_API_KEY"),
+        anthropic_base_url: get("ANTHROPIC_BASE_URL"),
         openai_api_key: get("OPENAI_API_KEY"),
+        openai_base_url: get("OPENAI_BASE_URL"),
         sansa_api_key: get("SANSA_API_KEY"),
+        sansa_base_url: get("SANSA_BASE_URL"),
         telegram_bot_token: get("TELEGRAM_BOT_TOKEN"),
         discord_bot_token: get("DISCORD_BOT_TOKEN"),
         discord_app_id: get("DISCORD_APP_ID"),
@@ -189,6 +205,23 @@ async fn validate_slack_token(token: &str) -> Result<String> {
     Ok(team)
 }
 
+/// Validate a base URL format.
+fn validate_base_url(url: &str) -> Result<()> {
+    if url.is_empty() {
+        return Ok(());
+    }
+
+    // Check protocol
+    if !url.starts_with("http://") && !url.starts_with("https://") {
+        anyhow::bail!("URL must start with http:// or https://");
+    }
+
+    // Try to parse as URL
+    reqwest::Url::parse(url).context("invalid URL format")?;
+
+    Ok(())
+}
+
 // ---------------------------------------------------------------------------
 // Helpers
 // ---------------------------------------------------------------------------
@@ -226,6 +259,7 @@ fn mask_token(s: &str) -> String {
 struct ProviderResult {
     provider: String,
     api_key: String,
+    base_url: Option<String>,
     from_env: bool,
     verified: bool,
 }
@@ -279,11 +313,20 @@ async fn section_provider(
         if detected.anthropic_api_key.is_some() {
             println!("    Found ANTHROPIC_API_KEY");
         }
+        if detected.anthropic_base_url.is_some() {
+            println!("    Found ANTHROPIC_BASE_URL");
+        }
         if detected.openai_api_key.is_some() {
             println!("    Found OPENAI_API_KEY");
         }
+        if detected.openai_base_url.is_some() {
+            println!("    Found OPENAI_BASE_URL");
+        }
         if detected.sansa_api_key.is_some() {
             println!("    Found SANSA_API_KEY");
+        }
+        if detected.sansa_base_url.is_some() {
+            println!("    Found SANSA_BASE_URL");
         }
         println!();
 
@@ -298,15 +341,22 @@ async fn section_provider(
         if sel == 0 {
             let provider = detected.best_provider().unwrap(); // safe - has_any_llm was true
             let key = detected.key_for_provider(provider).unwrap();
+            let base_url = detected.base_url_for_provider(provider);
+
+            // Show custom base URL if detected
+            if let Some(url) = base_url {
+                println!("  Using custom base URL: {}", url);
+            }
 
             // Validate
             print!("  Testing {provider} connection... ");
-            match validate_llm_key(provider, key, None).await {
+            match validate_llm_key(provider, key, base_url).await {
                 Ok(true) => {
                     println!("connected");
                     return Ok(Some(ProviderResult {
                         provider: provider.to_string(),
                         api_key: key.to_string(),
+                        base_url: base_url.map(|s| s.to_string()),
                         from_env: true,
                         verified: true,
                     }));
@@ -340,6 +390,41 @@ async fn section_provider(
     let provider = providers[selection];
     let env_hint = env_var_for_provider(provider);
 
+    // Base URL (optional)
+    let existing_base_url = existing
+        .as_ref()
+        .and_then(|c| c.llm.get("main"))
+        .and_then(|p| p.base_url.as_ref())
+        .map(|s| s.as_str());
+
+    let base_url_prompt = if let Some(existing) = existing_base_url {
+        format!("Custom base URL (optional, Enter to keep: {})", existing)
+    } else {
+        "Custom base URL (optional, Enter to skip)".to_string()
+    };
+
+    let base_url: String = Input::new()
+        .with_prompt(&base_url_prompt)
+        .allow_empty(true)
+        .validate_with(|input: &String| -> Result<(), String> {
+            if input.is_empty() {
+                return Ok(());
+            }
+            validate_base_url(input).map_err(|e| e.to_string())
+        })
+        .interact_text()
+        .context("base URL input cancelled")?;
+
+    let base_url = if base_url.trim().is_empty() {
+        existing_base_url.map(|s| s.to_string())
+    } else {
+        Some(base_url.trim().to_string())
+    };
+
+    if let Some(ref url) = base_url {
+        println!("  Using custom base URL: {}", url);
+    }
+
     // API key entry with retry loop
     loop {
         let key_prompt = if existing_has_key {
@@ -366,6 +451,7 @@ async fn section_provider(
             return Ok(Some(ProviderResult {
                 provider: provider.to_string(),
                 api_key: old_key,
+                base_url: base_url.clone(),
                 from_env: false,
                 verified: false,
             }));
@@ -377,6 +463,7 @@ async fn section_provider(
             return Ok(Some(ProviderResult {
                 provider: provider.to_string(),
                 api_key: String::new(),
+                base_url,
                 from_env: true,
                 verified: false,
             }));
@@ -384,12 +471,13 @@ async fn section_provider(
 
         // Validate the key
         print!("  Testing {provider} connection... ");
-        match validate_llm_key(provider, &api_key, None).await {
+        match validate_llm_key(provider, &api_key, base_url.as_deref()).await {
             Ok(true) => {
                 println!("connected");
                 return Ok(Some(ProviderResult {
                     provider: provider.to_string(),
                     api_key,
+                    base_url: base_url.clone(),
                     from_env: false,
                     verified: true,
                 }));
@@ -405,6 +493,7 @@ async fn section_provider(
                     return Ok(Some(ProviderResult {
                         provider: provider.to_string(),
                         api_key,
+                        base_url: base_url.clone(),
                         from_env: false,
                         verified: false,
                     }));
@@ -421,6 +510,7 @@ async fn section_provider(
                     return Ok(Some(ProviderResult {
                         provider: provider.to_string(),
                         api_key,
+                        base_url: base_url.clone(),
                         from_env: false,
                         verified: false,
                     }));
@@ -1026,7 +1116,7 @@ pub async fn run_wizard(config_dir: &Path) -> Result<()> {
             provider: pr.provider.clone(),
             model: None,
             api_key: None,
-            base_url: None,
+            base_url: pr.base_url.clone(),
             extra: Default::default(),
         };
 
@@ -1132,4 +1222,44 @@ pub async fn run_wizard(config_dir: &Path) -> Result<()> {
     println!();
 
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_validate_base_url_empty() {
+        assert!(validate_base_url("").is_ok());
+    }
+
+    #[test]
+    fn test_validate_base_url_https() {
+        assert!(validate_base_url("https://api.openai.com/v1").is_ok());
+    }
+
+    #[test]
+    fn test_validate_base_url_http() {
+        assert!(validate_base_url("http://localhost:8080").is_ok());
+    }
+
+    #[test]
+    fn test_validate_base_url_no_protocol() {
+        let result = validate_base_url("api.openai.com");
+        assert!(result.is_err());
+        assert!(result.unwrap_err().to_string().contains("must start with"));
+    }
+
+    #[test]
+    fn test_validate_base_url_wrong_protocol() {
+        let result = validate_base_url("ftp://example.com");
+        assert!(result.is_err());
+        assert!(result.unwrap_err().to_string().contains("must start with"));
+    }
+
+    #[test]
+    fn test_validate_base_url_invalid_format() {
+        let result = validate_base_url("https://invalid url with spaces");
+        assert!(result.is_err());
+    }
 }
